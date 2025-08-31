@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ar.edu.uade.toto_app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "ar.edu.uade.toto_app"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+
+        // placeholder por si lo querés usar en notificaciones/títulos
+        manifestPlaceholders = [appName: "Toto"]
+    }
+
+    // Asegura que BuildConfig se genere (a veces el IDE lo “pierde”)
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        debug {
+            // ¡Debe terminar en "/"!
+            buildConfigField "String", "BACKEND_BASE_URL", "\"http://192.168.1.9:8080/\""
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Cambiá por tu URL real de prod. ¡Debe terminar en "/"!
+            buildConfigField "String", "BACKEND_BASE_URL", "\"https://tu-backend.prod/\""
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    packagingOptions {
+        exclude 'META-INF/**'
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "com.google.android.material:material:1.12.0"
+    implementation "androidx.activity:activity:1.9.2"
+    implementation "androidx.core:core-ktx:1.13.1"
+
+    // Retrofit + OkHttp
+    implementation "com.squareup.retrofit2:retrofit:2.11.0"
+    implementation "com.squareup.retrofit2:converter-gson:2.11.0"
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    implementation "com.squareup.okhttp3:logging-interceptor:4.12.0"
+    implementation "com.google.code.gson:gson:2.11.0"
+
+    // Vosk Android (ASR offline)
+    implementation "com.alphacephei:vosk-android:0.3.47"
+}
