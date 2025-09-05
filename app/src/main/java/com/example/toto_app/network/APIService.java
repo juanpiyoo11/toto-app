@@ -22,4 +22,7 @@ public interface APIService {
 
     @POST("api/ask")
     Call<AskResponse> ask(@Body AskRequest body);
+
+    @POST("/api/nlu/route")
+    Call<NluRouteResponse> nluRoute(@Body NluRouteRequest req);
 }

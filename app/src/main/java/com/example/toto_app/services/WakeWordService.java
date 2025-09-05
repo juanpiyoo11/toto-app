@@ -8,10 +8,13 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
@@ -38,9 +41,6 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     public static final String ACTION_CMD_FINISHED = "com.example.toto_app.ACTION_CMD_FINISHED";
     public static final String ACTION_SAY = "com.example.toto_app.ACTION_SAY";
-    private volatile boolean isSpeaking = false;
-    private volatile boolean pendingWake = false;
-
 
     private static final String TAG = "WakeWord";
     private static final String CHANNEL_ID = "toto_listening";
@@ -62,6 +62,11 @@ public class WakeWordService extends Service implements RecognitionListener {
     private volatile boolean ttsReady = false;
     private final Random rng = new Random();
 
+    private volatile boolean isSpeaking = false;
+
+    private PowerManager.WakeLock wakeLock;
+    @Nullable private AudioFocusRequest audioFocusRequest;
+
     private static final String[] ACK_TEMPLATES = new String[]{
             "¿En qué te puedo ayudar, %s?",
             "Sí, %s, decime.",
@@ -71,20 +76,32 @@ public class WakeWordService extends Service implements RecognitionListener {
             "Acá estoy, %s."
     };
 
+    private void acquireWakeLock() {
+        if (wakeLock == null) {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG + ":MicLock");
+                wakeLock.setReferenceCounted(false);
+            }
+        }
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            wakeLock.acquire(10 * 60 * 1000L);
+        }
+    }
+
+    private void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            try { wakeLock.release(); } catch (Exception ignored) {}
+        }
+    }
+
     private final BroadcastReceiver cmdFinishedReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            Log.d(TAG, "InstructionService finalizado");
+            Log.d(TAG, "ACTION_CMD_FINISHED recibido → rearmar wake");
             triggered = false;
             lastDetectionText = "";
             lastDetectionAt = 0L;
-
-            if (isSpeaking) {
-                // Estoy leyendo respuesta → diferir el wake
-                pendingWake = true;
-                Log.d(TAG, "Difiero wake (isSpeaking=true)");
-            } else {
-                startWakeListening();
-            }
+            startWakeListening();
         }
     };
 
@@ -132,6 +149,13 @@ public class WakeWordService extends Service implements RecognitionListener {
         );
     }
 
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        Intent i = new Intent(getApplicationContext(), WakeWordService.class);
+        androidx.core.content.ContextCompat.startForegroundService(getApplicationContext(), i);
+        super.onTaskRemoved(rootIntent);
+    }
+
     private void initTTS() {
         tts = new TextToSpeech(getApplicationContext(), status -> {
             if (status == TextToSpeech.SUCCESS) {
@@ -147,26 +171,20 @@ public class WakeWordService extends Service implements RecognitionListener {
                         }
                     }
                     @Override public void onDone(String utteranceId) {
-                        // Volvemos al hilo principal para tocar audio/ASR
                         new android.os.Handler(getMainLooper()).post(() -> {
                             if (utteranceId != null && utteranceId.startsWith("toto_ack_")) {
                                 isSpeaking = false;
-                                // Fin del ACK → iniciar captura
                                 startInstructionService();
                             } else if (utteranceId != null && utteranceId.startsWith("toto_say_")) {
                                 isSpeaking = false;
-                                // Fin de la respuesta hablada → rearmar wake
                                 triggered = false;
                                 lastDetectionText = "";
                                 lastDetectionAt = 0L;
-                                pendingWake = false;
                                 startWakeListening();
                             }
                         });
                     }
-                    @Override public void onError(String utteranceId) {
-                        onDone(utteranceId); // misma política que onDone
-                    }
+                    @Override public void onError(String utteranceId) { onDone(utteranceId); }
                 });
             } else {
                 ttsReady = false;
@@ -178,11 +196,14 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void startWakeListening() {
         try {
             stopListening();
+            if (model == null) return;
             Recognizer rec = new Recognizer(model, 16000.0f);
-            rec.setGrammar("[\"toto\"]"); // solo wake
+            rec.setGrammar("[\"toto\"]");
             speechService = new SpeechService(rec, 16000.0f);
             speechService.startListening(this);
             requestAudioFocus();
+            acquireWakeLock();
+            Log.d(TAG, "Wake listening iniciado");
         } catch (Exception e) {
             Log.e(TAG, "startWakeListening error", e);
             stopSelf();
@@ -195,26 +216,48 @@ public class WakeWordService extends Service implements RecognitionListener {
             try { speechService.shutdown(); } catch (Exception ignored) {}
             speechService = null;
         }
+        abandonAudioFocus();
+        releaseWakeLock();
     }
 
     private void requestAudioFocus() {
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-        if (am != null) {
-            am.requestAudioFocus(
-                    fc -> { /* no-op */ },
+        if (am == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build();
+
+            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                    .setAudioAttributes(attrs)
+                    .setOnAudioFocusChangeListener(fc -> { })
+                    .build();
+            am.requestAudioFocus(audioFocusRequest);
+        } else {
+            am.requestAudioFocus(fc -> { },
                     AudioManager.STREAM_MUSIC,
-                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
-            );
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+        }
+    }
+
+    private void abandonAudioFocus() {
+        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (am == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (audioFocusRequest != null) am.abandonAudioFocusRequest(audioFocusRequest);
+        } else {
+            am.abandonAudioFocus(null);
         }
     }
 
     private void startInstructionService() {
-        // Cortar mic de wake antes de lanzar el de instrucción
         stopListening();
-
         Intent i = new Intent(this, InstructionService.class);
         i.putExtra("user_name", userName);
-        androidx.core.content.ContextCompat.startForegroundService(this, i);
+        startService(i); // Servicio normal, NO FGS
     }
 
     @Override
@@ -223,7 +266,7 @@ public class WakeWordService extends Service implements RecognitionListener {
             if (ACTION_SAY.equals(intent.getAction())) {
                 String toSay = intent.getStringExtra("text");
                 if (toSay != null && !toSay.trim().isEmpty()) {
-                    speakText(toSay.trim()); // NO iniciar InstructionService aquí
+                    speakText(toSay.trim());
                 }
                 return START_NOT_STICKY;
             }
@@ -244,12 +287,14 @@ public class WakeWordService extends Service implements RecognitionListener {
         stopListening();
         if (model != null) { model.close(); model = null; }
         if (tts != null) { try { tts.stop(); } catch (Exception ignored) {} tts.shutdown(); tts = null; }
+        releaseWakeLock();
+        abandonAudioFocus();
     }
 
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
 
     // === RecognitionListener ===
-    @Override public void onPartialResult(String hypothesis) { /* ignorado */ }
+    @Override public void onPartialResult(String hypothesis) { }
     @Override public void onResult(String hypothesis) { checkForWakeWord(hypothesis); }
     @Override public void onFinalResult(String hypothesis) { }
     @Override public void onError(Exception e) { Log.e(TAG, "ASR error", e); }
@@ -291,7 +336,6 @@ public class WakeWordService extends Service implements RecognitionListener {
             String text = String.format(Locale.getDefault(), template, userName);
             Bundle params = new Bundle();
             String utteranceId = "toto_ack_" + System.currentTimeMillis();
-            // Cortar mic para que el TTS no se auto-dispare
             stopListening();
             isSpeaking = true;
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
@@ -303,7 +347,10 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "Toto Listening", NotificationManager.IMPORTANCE_MIN);
+                    CHANNEL_ID,
+                    "Toto Listening",
+                    NotificationManager.IMPORTANCE_LOW
+            );
             ch.setDescription("Servicio de escucha de la palabra Toto");
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(ch);
@@ -311,7 +358,6 @@ public class WakeWordService extends Service implements RecognitionListener {
     }
 
     private void speakText(String text) {
-        // Apagar wake ASR para no auto-disparar
         stopListening();
         if (ttsReady && tts != null) {
             Bundle params = new Bundle();
@@ -322,5 +368,4 @@ public class WakeWordService extends Service implements RecognitionListener {
             Log.w(TAG, "TTS no listo para hablar");
         }
     }
-
 }
