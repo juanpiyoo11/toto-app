@@ -6,6 +6,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.app.role.RoleManager;
+import android.app.KeyguardManager;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.net.Uri;
@@ -265,7 +266,7 @@ public class InstructionService extends Service {
                 return;
             }
 
-            // ====== SOLO CAMBIOS EN LLAMADAS A PARTIR DE ACÁ ======
+            // ====== LLAMADAS ======
             case "CALL": {
                 String who = (nres != null && nres.slots != null) ? nres.slots.contact_query : null;
                 if (who == null || who.trim().isEmpty()) {
@@ -276,10 +277,6 @@ public class InstructionService extends Service {
 
                 boolean hasContacts = androidx.core.content.ContextCompat.checkSelfPermission(
                         this, android.Manifest.permission.READ_CONTACTS)
-                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
-
-                boolean hasCall = androidx.core.content.ContextCompat.checkSelfPermission(
-                        this, android.Manifest.permission.CALL_PHONE)
                         == android.content.pm.PackageManager.PERMISSION_GRANTED;
 
                 if (!hasContacts) {
@@ -301,12 +298,11 @@ public class InstructionService extends Service {
                 }
                 if ((rc == null || rc.number == null || rc.number.isEmpty()) && looksLikePhoneNumber(who)) {
                     String dial = normalizeDialable(who);
-                    // score 1.0 para indicar match fuerte (número explícito)
                     rc = new DeviceActions.ResolvedContact(who, dial, 1.0);
                 }
 
+                // Sin número → notificación genérica
                 if (rc == null || rc.number == null || rc.number.isEmpty()) {
-                    // Sin número -> abrir marcador (no directo) como última opción
                     showCallNotification(who, null);
                     sayViaWakeService("No encontré a " + who + " en tus contactos. Te dejé una notificación para marcar.", 12000);
                     postWatchdog(8000);
@@ -314,8 +310,22 @@ public class InstructionService extends Service {
                     return;
                 }
 
-                if (!hasCall) {
-                    // Pedir permiso CALL_PHONE para llamada directa
+                // *** Requisito nuevo: si está BLOQUEADO, siempre notificación simple (sin auto-nada) ***
+                if (isDeviceLocked()) {
+                    showCallNotification(rc.name, rc.number);
+                    sayViaWakeService("Desbloqueá y tocá la notificación para llamar a " + rc.name + ". O pedímelo de nuevo con el celu desbloqueado.", 12000);
+                    postWatchdog(8000);
+                    stopSelf();
+                    return;
+                }
+
+                // Desde acá: DESBLOQUEADO → intentar llamada directa
+                boolean hasCall = androidx.core.content.ContextCompat.checkSelfPermission(
+                        this, android.Manifest.permission.CALL_PHONE)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
+
+                if (!hasCall && !isDefaultDialer()) {
+                    // Pedimos CALL_PHONE solo si lo necesitamos (no dialer)
                     sayViaWakeService("Necesito permiso de llamadas para marcar directamente. Abrí la app para darlo.", 10000);
                     Intent perm = new Intent(this, com.example.toto_app.MainActivity.class)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -326,12 +336,10 @@ public class InstructionService extends Service {
                     return;
                 }
 
-                // === Directo: placeCall si somos dialer; si no, ACTION_CALL desde FGS ===
                 boolean ok = placeDirectCall(rc.name, rc.number);
                 if (ok) {
                     sayViaWakeService("Llamando a " + rc.name + ".", 4000);
                 } else {
-                    // fallback de verdad
                     showCallNotification(rc.name, rc.number);
                     sayViaWakeService("No pude iniciar la llamada directa. Te dejé una notificación para marcar.", 12000);
                 }
@@ -340,7 +348,7 @@ public class InstructionService extends Service {
                 stopSelf();
                 return;
             }
-            // ====== FIN CAMBIOS EN LLAMADAS ======
+            // ====== FIN LLAMADAS ======
 
             case "CANCEL": {
                 sayViaWakeService("Listo.", 6000);
@@ -385,7 +393,7 @@ public class InstructionService extends Service {
         }
     }
 
-    /** ¿Somos app de Teléfono por defecto? (requisito ideal para placeCall directo) */
+    /** ¿Somos app de Teléfono por defecto? (permite usar TelecomManager.placeCall) */
     private boolean isDefaultDialer() {
         if (Build.VERSION.SDK_INT >= 29) {
             try {
@@ -393,7 +401,6 @@ public class InstructionService extends Service {
                 return rm != null && rm.isRoleAvailable(RoleManager.ROLE_DIALER) && rm.isRoleHeld(RoleManager.ROLE_DIALER);
             } catch (Throwable ignored) {}
         }
-        // Compat
         try {
             TelecomManager tm = (TelecomManager) getSystemService(TELECOM_SERVICE);
             if (tm != null) {
@@ -404,35 +411,48 @@ public class InstructionService extends Service {
         return false;
     }
 
-    /** Intenta llamada directa: placeCall si somos dialer, si no ACTION_CALL desde FGS. */
+    /** ¿El dispositivo está bloqueado? */
+    private boolean isDeviceLocked() {
+        KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        if (km == null) return false;
+        if (Build.VERSION.SDK_INT >= 23) {
+            return km.isDeviceLocked() || km.isKeyguardLocked();
+        } else {
+            return km.isKeyguardLocked();
+        }
+    }
+
+    /** Llamada directa: si somos dialer, usa Telecom; si no, ACTION_CALL (desbloqueado). */
     private boolean placeDirectCall(String displayName, String number) {
-        boolean startedFg = startTempForeground("Llamando a " + (displayName == null ? "" : displayName));
-        try {
-            if (isDefaultDialer()) {
-                try {
-                    TelecomManager tm = (TelecomManager) getSystemService(TELECOM_SERVICE);
-                    if (tm == null) return false;
-                    Uri uri = Uri.fromParts("tel", number, null);
-                    Bundle extras = new Bundle();
-                    tm.placeCall(uri, extras);
-                    return true;
-                } catch (Throwable t) {
-                    Log.e(TAG, "placeCall falló, pruebo ACTION_CALL", t);
-                    // Intento ACTION_CALL abajo
-                }
-            }
-            // No somos dialer o placeCall falló → ACTION_CALL (requiere CALL_PHONE)
+        boolean isDialer = isDefaultDialer();
+
+        if (isDialer) {
+            // Solo dialers deberían iniciar FGS de tipo phoneCall
+            boolean startedFg = startTempForeground("Llamando a " + (displayName == null ? "" : displayName));
             try {
-                Intent call = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
-                call.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                startActivity(call);
+                TelecomManager tm = (TelecomManager) getSystemService(TELECOM_SERVICE);
+                if (tm == null) return false;
+                Uri uri = Uri.fromParts("tel", number, null);
+                Bundle extras = new Bundle();
+                tm.placeCall(uri, extras);
                 return true;
             } catch (Throwable t) {
-                Log.e(TAG, "ACTION_CALL falló", t);
+                Log.e(TAG, "placeCall falló", t);
                 return false;
+            } finally {
+                stopTempForeground();
             }
-        } finally {
-            stopTempForeground();
+        }
+
+        // No somos dialer → ACTION_CALL (asumimos desbloqueado y con permiso)
+        try {
+            Intent call = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
+            call.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            startActivity(call);
+            return true;
+        } catch (Throwable t) {
+            Log.e(TAG, "ACTION_CALL falló", t);
+            return false;
         }
     }
 
@@ -477,38 +497,51 @@ public class InstructionService extends Service {
         } catch (Throwable ignore) {}
     }
 
-    // ===== Notificación de llamada (fallback real) =====
+    // ===== Notificación de llamada (simple: tocar = llamar / marcar) =====
     private void showCallNotification(String name, @Nullable String number) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                    CALL_CHANNEL_ID, "Confirmación de llamada", NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("Acción para abrir el marcador o llamar a un contacto");
+                    CALL_CHANNEL_ID, "Llamar contacto", NotificationManager.IMPORTANCE_HIGH);
+            ch.setDescription("Tocar para llamar");
             nm.createNotificationChannel(ch);
         }
 
-        Intent intent = (number != null && !number.isEmpty())
-                ? new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number)))
-                : new Intent(Intent.ACTION_DIAL);
+        final boolean hasCallPerm =
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                        this, android.Manifest.permission.CALL_PHONE)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
 
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent tapIntent;
+        if (number != null && !number.isEmpty() && hasCallPerm) {
+            tapIntent = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
+        } else if (number != null && !number.isEmpty()) {
+            tapIntent = new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number)));
+        } else {
+            tapIntent = new Intent(Intent.ACTION_DIAL);
+        }
+        tapIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
         int reqCode = (int) (System.currentTimeMillis() & 0xFFFFFF);
-        PendingIntent pi = PendingIntent.getActivity(
-                this, reqCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent contentPi = PendingIntent.getActivity(
+                this, reqCode, tapIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        String who = (name != null && !name.isEmpty()) ? name : "Contacto";
 
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.sym_action_call)
-                .setContentTitle("Llamar a " + name)
-                .setContentText(number != null ? number : "Abrir marcador")
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentTitle("Llamar a " + who)
+                .setContentText(number != null && !number.isEmpty() ? number : "Tocar para abrir el marcador")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)          // heads-up
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)     // visible en lockscreen
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)       // básico, sin estilo de llamada
                 .setAutoCancel(true)
-                .setContentIntent(pi)
-                .addAction(new NotificationCompat.Action(android.R.drawable.sym_action_call, "Llamar", pi));
+                .setOnlyAlertOnce(true)
+                .setContentIntent(contentPi);
 
-        int notifyId = CALL_NOTIFY_ID_BASE + (name != null ? name.hashCode() & 0x0FFF : 0);
+        int notifyId = CALL_NOTIFY_ID_BASE + (who.hashCode() & 0x0FFF);
         nm.notify(notifyId, b.build());
     }
 
@@ -541,6 +574,10 @@ public class InstructionService extends Service {
         new android.os.Handler(getMainLooper()).postDelayed(() ->
                 sendBroadcast(new Intent(WakeWordService.ACTION_CMD_FINISHED)), ms);
     }
+
+    @Nullable @Override public IBinder onBind(Intent intent) { return null; }
+
+    @Override public void onDestroy() { super.onDestroy(); }
 
     /**
      * Intenta parsear ISO-8601 (con o sin zona) y devolver HH:mm locales.
@@ -608,21 +645,50 @@ public class InstructionService extends Service {
     private static String sanitizeForTTS(String s) {
         if (s == null) return "";
         String out = s;
+
+        // 1) Limpiar markdown/code sin tocar ? ¡ ! , . …
         out = out.replaceAll("(?s)```.*?```", " ");
         out = out.replace("`", "");
-        out = out.replaceAll("!\\[(.*?)\\]\\((.*?)\\)", "$1");
-        out = out.replaceAll("\\[(.*?)\\]\\((.*?)\\)", "$1");
-        out = out.replaceAll("(?m)^\\s{0,3}#{1,6}\\s*", "");
-        out = out.replaceAll("(?m)^\\s*>\\s?", "");
-        out = out.replace("*", "");
-        out = out.replace("_", "");
-        out = out.replaceAll("(?m)^\\s*([-*+]|•)\\s+", "");
-        out = out.replaceAll("(?m)^\\s*(\\d+)[\\.)]\\s+", "$1. ");
-        out = out.replaceAll("\\r?\\n\\s*\\r?\\n", ". ");
-        out = out.replaceAll("\\r?\\n", ". ");
+        out = out.replaceAll("!\\[(.*?)\\]\\((.*?)\\)", "$1");   // imágenes [alt](url)
+        out = out.replaceAll("\\[(.*?)\\]\\((.*?)\\)", "$1");    // links [txt](url)
+        out = out.replaceAll("(?m)^\\s{0,3}#{1,6}\\s*", "");     // # títulos
+        out = out.replaceAll("(?m)^\\s*>\\s?", "");              // citas
+
+        // 2) Listas y separadores → pausas naturales
+        out = out.replaceAll("(?m)^\\s*([-*+]|•)\\s+", "— ");    // viñetas → guion largo
+        out = out.replaceAll("(?m)^\\s*(\\d+)[\\.)]\\s+", "$1: "); // 1) → "1: "
+        out = out.replace(" - ", ", ");                          // guion corto → coma
+        out = out.replaceAll("\\((.*?)\\)", ", $1, ");           // paréntesis → comas
+        out = out.replace(":", ", ");                            // dos puntos → pausa corta
+
+        // 3) Saltos de línea → pausa larga (…)
+        out = out.replaceAll("\\r?\\n\\s*\\r?\\n", " … ");
+        out = out.replaceAll("\\r?\\n", " … ");
+
+        // 4) Normalizar espacios
         out = out.replaceAll("\\s{2,}", " ").trim();
+
+        // 5) Asegurar signos de apertura españoles si hay cierre
+        out = ensureSpanishOpeners(out);
+
+        // 6) Asegurar puntuación final si falta (mejor para cadencia)
+        if (!out.matches(".*[\\.!?…]$")) out = out + ".";
+
         return out;
     }
+
+    // Inserta ¿ y ¡ al comienzo de cada oración de pregunta/exclamación si faltan.
+    private static String ensureSpanishOpeners(String text) {
+        String[] parts = text.split("(?<=[\\.\\!\\?…])\\s+"); // cortar por fin de oración
+        for (int i = 0; i < parts.length; i++) {
+            String p = parts[i].trim();
+            if (p.endsWith("?") && !p.startsWith("¿")) parts[i] = "¿" + p;
+            else if (p.endsWith("!") && !p.startsWith("¡")) parts[i] = "¡" + p;
+            else parts[i] = p;
+        }
+        return String.join(" ", parts);
+    }
+
 
     /** ¿El usuario dijo un número de teléfono? (muy laxo) */
     private static boolean looksLikePhoneNumber(String s) {
@@ -636,8 +702,4 @@ public class InstructionService extends Service {
         if (s == null) return "";
         return s.replaceAll("[^0-9+]", "");
     }
-
-    @Nullable @Override public IBinder onBind(Intent intent) { return null; }
-
-    @Override public void onDestroy() { super.onDestroy(); }
 }
