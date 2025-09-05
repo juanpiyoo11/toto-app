@@ -159,24 +159,37 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void initTTS() {
         tts = new TextToSpeech(getApplicationContext(), status -> {
             if (status == TextToSpeech.SUCCESS) {
+                // === idioma/región original ===
                 int r = tts.setLanguage(new Locale("es", "AR"));
-                tts.setPitch(1.0f);
-                tts.setSpeechRate(1.0f);
                 ttsReady = (r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED);
+
+                // Pausas/naturalidad suaves (no cambia acento)
+                tts.setPitch(0.96f);
+                tts.setSpeechRate(0.9f);
+
+                // Volumen: usar “Assistant” cuando esté disponible
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build();
+                tts.setAudioAttributes(attrs);
 
                 tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                     @Override public void onStart(String utteranceId) {
                         if (utteranceId != null && (utteranceId.startsWith("toto_ack_") || utteranceId.startsWith("toto_say_"))) {
                             isSpeaking = true;
+                            requestTtsAudioFocus(); // focus transitorio para Assistant
                         }
                     }
                     @Override public void onDone(String utteranceId) {
                         new android.os.Handler(getMainLooper()).post(() -> {
                             if (utteranceId != null && utteranceId.startsWith("toto_ack_")) {
                                 isSpeaking = false;
+                                abandonAudioFocus();
                                 startInstructionService();
                             } else if (utteranceId != null && utteranceId.startsWith("toto_say_")) {
                                 isSpeaking = false;
+                                abandonAudioFocus();
                                 triggered = false;
                                 lastDetectionText = "";
                                 lastDetectionAt = 0L;
@@ -201,7 +214,7 @@ public class WakeWordService extends Service implements RecognitionListener {
             rec.setGrammar("[\"toto\"]");
             speechService = new SpeechService(rec, 16000.0f);
             speechService.startListening(this);
-            requestAudioFocus();
+            requestAudioFocus();   // focus para captura (Assistant)
             acquireWakeLock();
             Log.d(TAG, "Wake listening iniciado");
         } catch (Exception e) {
@@ -220,6 +233,7 @@ public class WakeWordService extends Service implements RecognitionListener {
         releaseWakeLock();
     }
 
+    // Focus para el mic (escucha)
     private void requestAudioFocus() {
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         if (am == null) return;
@@ -239,6 +253,29 @@ public class WakeWordService extends Service implements RecognitionListener {
             am.requestAudioFocus(fc -> { },
                     AudioManager.STREAM_MUSIC,
                     AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+        }
+    }
+
+    // Focus para TTS (hablar)
+    private void requestTtsAudioFocus() {
+        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (am == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build();
+
+            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(attrs)
+                    .setOnAudioFocusChangeListener(fc -> { })
+                    .build();
+            am.requestAudioFocus(audioFocusRequest);
+        } else {
+            am.requestAudioFocus(fc -> { },
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
         }
     }
 
@@ -334,6 +371,8 @@ public class WakeWordService extends Service implements RecognitionListener {
         if (ttsReady && tts != null) {
             String template = ACK_TEMPLATES[rng.nextInt(ACK_TEMPLATES.length)];
             String text = String.format(Locale.getDefault(), template, userName);
+            text = prepTts(text); // ← puntuación
+
             Bundle params = new Bundle();
             String utteranceId = "toto_ack_" + System.currentTimeMillis();
             stopListening();
@@ -360,12 +399,32 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void speakText(String text) {
         stopListening();
         if (ttsReady && tts != null) {
+            String s = prepTts(text); // ← puntuación
             Bundle params = new Bundle();
             String utteranceId = "toto_say_" + System.currentTimeMillis();
             isSpeaking = true;
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
+            tts.speak(s, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
         } else {
             Log.w(TAG, "TTS no listo para hablar");
         }
+    }
+
+    // --- Preprocesado simple de puntuación para TTS ---
+    private String prepTts(String text) {
+        if (text == null) return "";
+        String s = text.trim();
+
+        // Colapsar espacios
+        s = s.replaceAll("\\s+", " ");
+
+        // Quitar espacio antes de coma/punto
+        s = s.replaceAll("\\s+,", ",");
+        s = s.replaceAll("\\s+\\.", ".");
+
+        // Si no termina en signo, agregar punto (para forzar pausa final)
+        if (!s.matches(".*[.!?¡¿…]$")) {
+            s = s + ".";
+        }
+        return s;
     }
 }
