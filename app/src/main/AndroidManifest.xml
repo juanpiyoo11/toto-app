@@ -44,6 +44,16 @@
             android:foregroundServiceType="microphone" />
 
         <service
+            android:name="com.example.toto_app.services.WhatsAppListener"
+            android:label="Toto WhatsApp Listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name="com.example.toto_app.services.InstructionService"
             android:exported="false"
             android:foregroundServiceType="phoneCall" />

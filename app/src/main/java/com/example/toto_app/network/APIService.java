@@ -10,19 +10,20 @@ import retrofit2.http.Part;
 
 public interface APIService {
 
-    // Ajustá la ruta a como lo expone tu toto-backend
-    // Ej: POST http://<host>:8080/api/stt/transcribe
     @Multipart
     @POST("api/stt")
     Call<TranscriptionResponse> transcribe(
             @Part MultipartBody.Part audio,
-            @Part("language") RequestBody language,      // "es" por defecto
-            @Part("userName") RequestBody userName       // opcional, para logging/telemetría
+            @Part("language") RequestBody language,
+            @Part("userName") RequestBody userName
     );
 
     @POST("api/ask")
     Call<AskResponse> ask(@Body AskRequest body);
 
-    @POST("/api/nlu/route")
+    @POST("api/nlu/route")
     Call<NluRouteResponse> nluRoute(@Body NluRouteRequest req);
+
+    @POST("api/whatsapp/send")
+    Call<WhatsAppSendResponse> waSend(@Body WhatsAppSendRequest req);
 }
