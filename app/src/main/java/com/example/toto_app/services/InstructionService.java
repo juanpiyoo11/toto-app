@@ -71,7 +71,7 @@ public class InstructionService extends Service {
 
     // ===== Contacto de emergencia (por ahora hardcodeado) =====
     private static final String EMERGENCY_NAME   = "Tamara";
-    private static final String EMERGENCY_NUMBER = "+5491158550932";
+    private static final String EMERGENCY_NUMBER = "+5491159753115";
     private static String buildEmergencyText(String userName) {
         String u = (userName == null || userName.isBlank()) ? "la persona" : userName;
         return "⚠️ Alerta: " + u + " puede haberse caído o pidió ayuda. "
@@ -416,11 +416,20 @@ public class InstructionService extends Service {
             }
         }
 
-        if (nres != null && nres.needs_confirmation && nres.clarifying_question != null
+        if (nres != null && nres.needs_confirmation
+                && nres.clarifying_question != null
                 && !nres.clarifying_question.trim().isEmpty()) {
-            sayViaWakeService(sanitizeForTTS(nres.clarifying_question.trim()), 8000);
-            stopSelf();
-            return;
+
+            boolean actionable =
+                    "SET_ALARM".equals(intentName) ||
+                            "CALL".equals(intentName) ||
+                            "SEND_MESSAGE".equals(intentName);
+
+            if (actionable) {
+                sayViaWakeService(sanitizeForTTS(nres.clarifying_question.trim()), 8000);
+                stopSelf();
+                return;
+            }
         }
 
         // 4) Ejecutar intención
