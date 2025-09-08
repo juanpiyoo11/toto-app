@@ -42,6 +42,11 @@ public class WakeWordService extends Service implements RecognitionListener {
     public static final String ACTION_CMD_FINISHED = "com.example.toto_app.ACTION_CMD_FINISHED";
     public static final String ACTION_SAY = "com.example.toto_app.ACTION_SAY";
 
+    public static final String EXTRA_AFTER_SAY_START_SERVICE = "after_say_start_service";
+    public static final String EXTRA_AFTER_SAY_USER_NAME     = "after_say_user_name";
+    public static final String EXTRA_AFTER_SAY_FALL_MODE     = "after_say_fall_mode";
+    @Nullable private Intent pendingAfterSay;
+
     private static final String TAG = "WakeWord";
     private static final String CHANNEL_ID = "toto_listening";
 
@@ -67,7 +72,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     private PowerManager.WakeLock wakeLock;
     @Nullable private AudioFocusRequest audioFocusRequest;
 
-    private static final String[] ACK_TEMPLATES = new String[]{
+    private static final String[] ACK_TEMPLATES = new String[] {
             "¿En qué te puedo ayudar, %s?",
             "Sí, %s, decime.",
             "Te escucho, %s.",
@@ -159,15 +164,12 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void initTTS() {
         tts = new TextToSpeech(getApplicationContext(), status -> {
             if (status == TextToSpeech.SUCCESS) {
-                // === idioma/región original ===
                 int r = tts.setLanguage(new Locale("es", "AR"));
                 ttsReady = (r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED);
 
-                // Pausas/naturalidad suaves (no cambia acento)
                 tts.setPitch(0.96f);
                 tts.setSpeechRate(0.9f);
 
-                // Volumen: usar “Assistant” cuando esté disponible
                 AudioAttributes attrs = new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ASSISTANT)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -178,7 +180,7 @@ public class WakeWordService extends Service implements RecognitionListener {
                     @Override public void onStart(String utteranceId) {
                         if (utteranceId != null && (utteranceId.startsWith("toto_ack_") || utteranceId.startsWith("toto_say_"))) {
                             isSpeaking = true;
-                            requestTtsAudioFocus(); // focus transitorio para Assistant
+                            requestTtsAudioFocus();
                         }
                     }
                     @Override public void onDone(String utteranceId) {
@@ -186,14 +188,20 @@ public class WakeWordService extends Service implements RecognitionListener {
                             if (utteranceId != null && utteranceId.startsWith("toto_ack_")) {
                                 isSpeaking = false;
                                 abandonAudioFocus();
-                                startInstructionService();
+                                startInstructionService(); // flujo normal tras “Toto”
                             } else if (utteranceId != null && utteranceId.startsWith("toto_say_")) {
                                 isSpeaking = false;
                                 abandonAudioFocus();
-                                triggered = false;
-                                lastDetectionText = "";
-                                lastDetectionAt = 0L;
-                                startWakeListening();
+                                // NUEVO: si hay encadenado, lanzamos ese servicio. Si no, rearmamos wake.
+                                if (pendingAfterSay != null) {
+                                    try { startService(pendingAfterSay); } catch (Exception ignored) {}
+                                    pendingAfterSay = null;
+                                } else {
+                                    triggered = false;
+                                    lastDetectionText = "";
+                                    lastDetectionAt = 0L;
+                                    startWakeListening();
+                                }
                             }
                         });
                     }
@@ -214,7 +222,7 @@ public class WakeWordService extends Service implements RecognitionListener {
             rec.setGrammar("[\"toto\"]");
             speechService = new SpeechService(rec, 16000.0f);
             speechService.startListening(this);
-            requestAudioFocus();   // focus para captura (Assistant)
+            requestAudioFocus();
             acquireWakeLock();
             Log.d(TAG, "Wake listening iniciado");
         } catch (Exception e) {
@@ -302,6 +310,18 @@ public class WakeWordService extends Service implements RecognitionListener {
         if (intent != null) {
             if (ACTION_SAY.equals(intent.getAction())) {
                 String toSay = intent.getStringExtra("text");
+                boolean chain = intent.getBooleanExtra(EXTRA_AFTER_SAY_START_SERVICE, false);
+                if (chain) {
+                    Intent next = new Intent(this, InstructionService.class);
+                    String un = intent.getStringExtra(EXTRA_AFTER_SAY_USER_NAME);
+                    if (un != null) next.putExtra("user_name", un);
+                    String fm = intent.getStringExtra(EXTRA_AFTER_SAY_FALL_MODE);
+                    if (fm != null) next.putExtra("fall_mode", fm);
+                    pendingAfterSay = next;
+                } else {
+                    pendingAfterSay = null;
+                }
+
                 if (toSay != null && !toSay.trim().isEmpty()) {
                     speakText(toSay.trim());
                 }
@@ -371,13 +391,13 @@ public class WakeWordService extends Service implements RecognitionListener {
         if (ttsReady && tts != null) {
             String template = ACK_TEMPLATES[rng.nextInt(ACK_TEMPLATES.length)];
             String text = String.format(Locale.getDefault(), template, userName);
-            text = prepTts(text); // ← puntuación
+            String s = prepTts(text);
 
             Bundle params = new Bundle();
             String utteranceId = "toto_ack_" + System.currentTimeMillis();
             stopListening();
             isSpeaking = true;
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
+            tts.speak(s, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
         } else {
             startInstructionService();
         }
@@ -399,7 +419,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void speakText(String text) {
         stopListening();
         if (ttsReady && tts != null) {
-            String s = prepTts(text); // ← puntuación
+            String s = prepTts(text);
             Bundle params = new Bundle();
             String utteranceId = "toto_say_" + System.currentTimeMillis();
             isSpeaking = true;
@@ -413,18 +433,10 @@ public class WakeWordService extends Service implements RecognitionListener {
     private String prepTts(String text) {
         if (text == null) return "";
         String s = text.trim();
-
-        // Colapsar espacios
         s = s.replaceAll("\\s+", " ");
-
-        // Quitar espacio antes de coma/punto
         s = s.replaceAll("\\s+,", ",");
         s = s.replaceAll("\\s+\\.", ".");
-
-        // Si no termina en signo, agregar punto (para forzar pausa final)
-        if (!s.matches(".*[.!?¡¿…]$")) {
-            s = s + ".";
-        }
+        if (!s.matches(".*[.!?¡¿…]$")) s = s + ".";
         return s;
     }
 }

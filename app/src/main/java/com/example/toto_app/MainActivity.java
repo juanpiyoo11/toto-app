@@ -10,6 +10,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.widget.Button;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
@@ -19,6 +20,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.services.WakeWordService;
 
 import java.util.ArrayList;
@@ -33,12 +35,25 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_IGNORE_BATTERY  = 2001;
     private static final int REQ_ROLE_DIALER     = 5001;
 
+    private String userName = "Juan";
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
 
+        Button btn = findViewById(R.id.btnMockFall);
+        btn.setOnClickListener(v -> {
+            Toast.makeText(this, "Simulando caída…", Toast.LENGTH_SHORT).show();
+
+            Intent i = new Intent(FallSignals.ACTION_FALL_DETECTED);
+            // Muy importante para limitarlo a tu propia app
+            i.setPackage(getPackageName());
+            i.putExtra(FallSignals.EXTRA_SOURCE, "ui_button");
+            i.putExtra(FallSignals.EXTRA_USER_NAME, "Juan");
+            sendBroadcast(i);
+        });
         // Pide permisos base y arranca Toto
         requestNeededPermissionsAndStart();
 
@@ -59,25 +74,18 @@ public class MainActivity extends AppCompatActivity {
     private void requestNeededPermissionsAndStart() {
         List<String> needed = new ArrayList<>();
 
-        // Micrófono (siempre)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             needed.add(Manifest.permission.RECORD_AUDIO);
         }
-
-        // Contactos (para “llamá a …”)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
                 != PackageManager.PERMISSION_GRANTED) {
             needed.add(Manifest.permission.READ_CONTACTS);
         }
-
-        // Llamadas (para ACTION_CALL si somos dialer)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
                 != PackageManager.PERMISSION_GRANTED) {
             needed.add(Manifest.permission.CALL_PHONE);
         }
-
-        // Notificaciones (Android 13+)
         if (Build.VERSION.SDK_INT >= 33 &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED) {
@@ -87,7 +95,6 @@ public class MainActivity extends AppCompatActivity {
         if (!needed.isEmpty()) {
             ActivityCompat.requestPermissions(this, needed.toArray(new String[0]), REQ_ALL_PERMS);
         } else {
-            // Todo listo → arrancamos servicio y sugerimos optimizaciones
             startWakeWordService();
             maybeRequestIgnoreBatteryOptimizations();
             maybeRequestDefaultDialerRole();
@@ -109,6 +116,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void startWakeWordService() {
         Intent i = new Intent(this, WakeWordService.class);
+        i.putExtra("user_name", userName);
         ContextCompat.startForegroundService(this, i);
         Toast.makeText(this, "Escuchando \"Toto\" en segundo plano", Toast.LENGTH_SHORT).show();
     }
@@ -126,7 +134,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** Pedí el rol de dialer para poder iniciar llamadas directas (sin abrir el marcador). */
     private void maybeRequestDefaultDialerRole() {
         if (Build.VERSION.SDK_INT >= 29) {
             RoleManager rm = (RoleManager) getSystemService(ROLE_SERVICE);
@@ -134,9 +141,7 @@ public class MainActivity extends AppCompatActivity {
                 try {
                     Intent roleIntent = rm.createRequestRoleIntent(RoleManager.ROLE_DIALER);
                     startActivityForResult(roleIntent, REQ_ROLE_DIALER);
-                } catch (Exception ignored) {
-                    // Algunos OEMs pueden bloquear el intent → seguimos sin llamada directa
-                }
+                } catch (Exception ignored) {}
             }
         }
     }
@@ -182,23 +187,6 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 Toast.makeText(this, "Sin permiso de contactos no puedo buscar por nombre.", Toast.LENGTH_LONG).show();
             }
-        }
-    }
-
-    @Override
-    @SuppressWarnings("deprecation") // para startActivityForResult en RoleManager/batería
-    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        if (requestCode == REQ_ROLE_DIALER) {
-            if (resultCode == Activity.RESULT_OK) {
-                Toast.makeText(this, "Toto ahora es tu marcador predeterminado. Podré iniciar llamadas directas.", Toast.LENGTH_LONG).show();
-            } else {
-                Toast.makeText(this, "No soy el marcador predeterminado. Abriré el marcador para confirmar llamadas.", Toast.LENGTH_LONG).show();
-            }
-        } else if (requestCode == REQ_IGNORE_BATTERY) {
-            // Nada crítico; solo feedback
-            Toast.makeText(this, "Optimización de batería ajustada.", Toast.LENGTH_SHORT).show();
         }
     }
 }
