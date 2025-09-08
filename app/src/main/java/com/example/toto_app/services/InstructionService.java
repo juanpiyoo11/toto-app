@@ -16,6 +16,8 @@ import android.os.IBinder;
 import android.os.SystemClock;
 import android.telecom.TelecomManager;
 import android.util.Log;
+import com.example.toto_app.network.WhatsAppSendRequest;
+import com.example.toto_app.network.WhatsAppSendResponse;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -111,6 +113,39 @@ public class InstructionService extends Service {
             stopSelf();
             return;
         }
+
+        // === LECTURA DE WHATSAPP ENTRANTE ===
+        try {
+            String norm = java.text.Normalizer.normalize(transcript, java.text.Normalizer.Form.NFD)
+                    .replaceAll("\\p{M}", "")
+                    .toLowerCase(java.util.Locale.ROOT)
+                    .replaceAll("[¿?¡!.,;:()\\[\\]\"]", " ")
+                    .replaceAll("\\s+", " ")
+                    .trim();
+
+            boolean saysAffirm =
+                    norm.matches("^(si|dale|claro|ok|de una|bueno|obvio|por favor|si por favor|si dale)(\\s.*)?$");
+
+            boolean saysRead =
+                    norm.contains("leelo") || norm.contains("leela") ||
+                            norm.contains("leerlo") || norm.contains("leeme") ||
+                            norm.contains("leermelo") || norm.contains("leermela") ||
+                            norm.contains("lee el mensaje") || norm.contains("leelo por favor") ||
+                            norm.contains("leela por favor");
+
+            final long FRESH_MS = 3 * 60_000L; // 3 min
+            boolean fresh = IncomingMessageStore.get().hasFresh(FRESH_MS);
+
+            if (fresh && ((IncomingMessageStore.get().isAwaitingConfirm() && saysAffirm) || saysRead)) {
+                IncomingMessageStore.Msg m = IncomingMessageStore.get().consume();
+                if (m != null) {
+                    String tts = (m.from == null ? "alguien" : m.from) + " dice: " + (m.body == null ? "…" : m.body);
+                    sayViaWakeService(tts, 8000);
+                    stopSelf();
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {}
 
         // ==== Alarmas locales (RELATIVAS y ABSOLUTAS) ====
         boolean wantsAlarm = looksLikeAlarmRequest(transcript);
@@ -216,7 +251,8 @@ public class InstructionService extends Service {
         if (nres != null && nres.ack_tts != null && !nres.ack_tts.trim().isEmpty()) {
             boolean isAnswerish = "ANSWER".equals(intentName) || "UNKNOWN".equals(intentName);
             if (!"QUERY_TIME".equals(intentName) && !"QUERY_DATE".equals(intentName)
-                    && !isAnswerish && !"CALL".equals(intentName)) {
+                    && !isAnswerish && !"CALL".equals(intentName)
+                    && !"SEND_MESSAGE".equals(intentName)) {
                 sayViaWakeService(sanitizeForTTS(nres.ack_tts), 6000);
             }
         }
@@ -350,13 +386,105 @@ public class InstructionService extends Service {
             }
             // ====== FIN LLAMADAS ======
 
+            // ====== ENVIAR MENSAJE (WhatsApp vía backend) ======
+            case "SEND_MESSAGE": {
+                // 1) Preferí slots del NLU
+                String who = (nres != null && nres.slots != null) ? nres.slots.contact_query : null;
+                String msg = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
+
+                // 2) Fallback local robusto (decile/mandale/escribile/avisale…)
+                if ((who == null || who.isBlank()) || (msg == null || msg.isBlank())) {
+                    FallbackMessage fm = fallbackExtractMessage(transcript);
+                    if (who == null || who.isBlank()) who = (fm != null ? fm.who : null);
+                    if (msg == null || msg.isBlank()) msg = (fm != null ? fm.text : null);
+                }
+
+                // 3) Si no hay destinatario, pedilo
+                if (who == null || who.trim().isEmpty()) {
+                    sayViaWakeService("¿A quién querés mandarle el mensaje?", 9000);
+                    stopSelf();
+                    return;
+                }
+
+                // 4) Resolver número desde Contactos
+                boolean hasContacts = androidx.core.content.ContextCompat.checkSelfPermission(
+                        this, android.Manifest.permission.READ_CONTACTS)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
+
+                if (!hasContacts) {
+                    sayViaWakeService("Necesito permiso de contactos para mandar por nombre. Abrí la app para darlo.", 10000);
+                    Intent perm = new Intent(this, com.example.toto_app.MainActivity.class)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            .putExtra("request_contacts_perm", true);
+                    startActivity(perm);
+                    postWatchdog(8000);
+                    stopSelf();
+                    return;
+                }
+
+                DeviceActions.ResolvedContact rc = DeviceActions.resolveContactByNameFuzzy(this, who);
+                if (rc == null || rc.number == null || rc.number.isEmpty()) {
+                    sayViaWakeService("No encontré a " + who + " en tus contactos.", 9000);
+                    stopSelf();
+                    return;
+                }
+
+                // 5) Si falta el texto, pedilo
+                if (msg == null || msg.trim().isEmpty()) {
+                    sayViaWakeService("¿Qué querés que le diga a " + rc.name + "?", 9000);
+                    stopSelf();
+                    return;
+                }
+
+                String to = rc.number.replaceAll("[^0-9+]", "");
+                try {
+                    WhatsAppSendRequest wreq = new WhatsAppSendRequest(to, msg.trim(), Boolean.FALSE);
+                    retrofit2.Response<WhatsAppSendResponse> wresp =
+                            RetrofitClient.api().waSend(wreq).execute();
+
+                    WhatsAppSendResponse wbody = wresp.body();
+                    boolean ok =
+                            wresp.isSuccessful()
+                                    && wbody != null
+                                    && (
+                                    "ok".equalsIgnoreCase(wbody.status)
+                                            || "ok_template".equalsIgnoreCase(wbody.status)
+                                            || (wbody.id != null && !wbody.id.trim().isEmpty())
+                            );
+
+                    if (ok) {
+                        sayViaWakeService("Listo, le mandé el mensaje a " + rc.name + ".", 8000);
+                    } else {
+                        // === Manejo de errores del backend ===
+                        String err = null;
+                        try { err = (wresp.errorBody() != null) ? wresp.errorBody().string() : null; } catch (Exception ignored) {}
+                        Log.e(TAG, "WA send failed: HTTP=" + (wresp != null ? wresp.code() : -1)
+                                + " status=" + (wbody != null ? wbody.status : "null")
+                                + " id=" + (wbody != null ? wbody.id : "null")
+                                + " err=" + err);
+
+                        if (err != null && (err.contains("recipient_not_allowed") || err.contains("131030"))) {
+                            sayViaWakeService("No pude enviar por WhatsApp porque ese número no está autorizado aún. Agregalo como destinatario de prueba en WhatsApp Manager.", 12000);
+                        } else {
+                            sayViaWakeService("No pude mandar el mensaje ahora.", 8000);
+                        }
+                    }
+                } catch (Exception ex) {
+                    android.util.Log.e(TAG, "Error /api/whatsapp/send", ex);
+                    sayViaWakeService("Tuve un problema mandando el mensaje.", 8000);
+                }
+
+                stopSelf();
+                return;
+            }
+            // ====== FIN ENVIAR MENSAJE ======
+
+
             case "CANCEL": {
                 sayViaWakeService("Listo.", 6000);
                 stopSelf();
                 return;
             }
-            case "OPEN_APP":
-            case "SEND_MESSAGE":
             case "ANSWER":
             case "UNKNOWN":
             default: {
@@ -610,6 +738,76 @@ public class InstructionService extends Service {
         }
         return null;
     }
+
+    /** Estructura simple para extracción local de "mandale/decile/escribile/avisale..." */
+    private static final class FallbackMessage {
+        final String who; final String text;
+        FallbackMessage(String who, String text) { this.who = who; this.text = text; }
+    }
+
+    /** Intenta extraer (destinatario, texto) de frases naturales: "decile a mamá que llego", "mandale a Lucas: voy", "escribile a Pablo nos vemos 8", "avisale a Sofi que estoy abajo". */
+    @Nullable
+    private static FallbackMessage fallbackExtractMessage(String raw) {
+        if (raw == null) return null;
+        String s = java.text.Normalizer.normalize(raw, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[“”\"']", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        // Patrones con “a <who> (que|:) <texto>”
+        String[] pats = new String[] {
+                "\\b(?:mandale|manda|mandar|escribile|escribe|escribir|decile|decime|dile|avisale|avisa|avisar)(?:\\s+un\\s+mensaje)?\\s+a\\s+([a-z0-9ñáéíóúü\\s.-]{1,40})\\s*(?:que|de que|diciendole|diciendole que|:|–|-)\\s*(.+)$",
+                "\\b(?:mandale|manda|escribile|decile|avisale)(?:\\s+por\\s+whatsapp)?\\s+a\\s+([a-z0-9ñáéíóúü\\s.-]{1,40})\\s+(.*)$",
+                "\\b(?:mensaje|msj)\\s+a\\s+([a-z0-9ñáéíóúü\\s.-]{1,40})\\s*(?:que|:)?\\s*(.+)$"
+        };
+
+        for (String p : pats) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(p).matcher(s);
+            if (m.find()) {
+                String who = cleanPerson(m.group(1));
+                String text = cleanMessage(m.groupCount() >= 2 ? m.group(2) : "");
+                if (!who.isEmpty() && !text.isEmpty()) return new FallbackMessage(who, text);
+            }
+        }
+
+        // “decile a <who>” sin texto → solo destinatario
+        java.util.regex.Matcher m2 = java.util.regex.Pattern
+                .compile("\\b(?:mandale|manda|escribile|decile|dile|avisale)\\s+a\\s+([a-z0-9ñáéíóúü\\s.-]{1,40})\\b")
+                .matcher(s);
+        if (m2.find()) {
+            String who = cleanPerson(m2.group(1));
+            if (!who.isEmpty()) return new FallbackMessage(who, "");
+        }
+        return null;
+    }
+
+    private static String cleanPerson(String s) {
+        if (s == null) return "";
+        s = s.replaceAll("(?:\\s+por\\s+favor.*$)|(?:\\s+gracias.*$)|(?:\\s+ahora.*$)|(?:\\s+urgente.*$)|(?:\\s+ya.*$)", " ");
+        s = s.replaceAll("[^a-z0-9ñáéíóúü\\s.-]", " ");
+        s = s.replaceAll("\\s+", " ").trim();
+        // “a+kevin” → “kevin”
+        if (s.startsWith("a") && s.length() >= 2 && "bcdfghjklmnñpqrstvwxyz".indexOf(s.charAt(1)) >= 0) {
+            s = s.substring(1);
+        }
+        // quedarnos con hasta 4 tokens
+        String[] tok = s.split("\\s+");
+        int limit = Math.min(tok.length, 4);
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < limit; i++) { if (i > 0) out.append(' '); out.append(tok[i]); }
+        return out.toString();
+    }
+
+    private static String cleanMessage(String s) {
+        if (s == null) return "";
+        s = s.replaceAll("\\s+", " ").trim();
+        // sacar muletillas al final
+        s = s.replaceAll("(\\s+por\\s+favor.*$)|(\\s+gracias.*$)", "").trim();
+        return s;
+    }
+
 
     // ===== Helpers =====
     private static String safe(String s) { return (s == null) ? "null" : s; }
