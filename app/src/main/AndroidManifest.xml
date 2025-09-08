@@ -72,5 +72,13 @@
             android:name="com.example.toto_app.receivers.CallActionReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name="com.example.toto_app.receivers.FallTriggerReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.toto_app.ACTION_FALL_DETECTED" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>
