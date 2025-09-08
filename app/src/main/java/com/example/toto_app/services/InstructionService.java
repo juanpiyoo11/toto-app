@@ -8,8 +8,11 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.app.role.RoleManager;
 import android.app.KeyguardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -26,6 +29,7 @@ import androidx.core.app.NotificationCompat;
 
 import com.example.toto_app.actions.DeviceActions;
 import com.example.toto_app.audio.InstructionCapture;
+import com.example.toto_app.audio.LocalStt;
 import com.example.toto_app.network.APIService;
 import com.example.toto_app.network.RetrofitClient;
 import com.example.toto_app.network.TranscriptionResponse;
@@ -69,6 +73,48 @@ public class InstructionService extends Service {
     private int fallRetry = 0;
     // ===================================
 
+    // ===== Circuit breaker simple para backend =====
+    private static final class NetBreaker {
+        private static int fails = 0;
+        private static long backoffUntilMs = 0L;
+
+        private static final long[] SCHEDULE = new long[] {
+                15_000L,   // 1ª falla → 15s
+                60_000L,   // 2ª → 60s
+                300_000L,  // 3ª → 5min
+                1_800_000L // 4ª+ → 30min
+        };
+
+        static synchronized boolean allow(Context ctx) {
+            long now = SystemClock.uptimeMillis();
+            if (now < backoffUntilMs) return false;
+            return hasValidatedInternet(ctx);
+        }
+
+        static synchronized void success() {
+            fails = 0;
+            backoffUntilMs = 0L;
+        }
+
+        static synchronized void fail() {
+            fails++;
+            int idx = Math.min(fails - 1, SCHEDULE.length - 1);
+            backoffUntilMs = SystemClock.uptimeMillis() + SCHEDULE[idx];
+        }
+    }
+
+    private static boolean hasValidatedInternet(Context ctx) {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            NetworkCapabilities nc = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            return nc != null && nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+    // ===================================
+
     // ===== Contacto de emergencia (por ahora hardcodeado) =====
     private static final String EMERGENCY_NAME   = "Tamara";
     private static final String EMERGENCY_NUMBER = "+5491158550932";
@@ -109,7 +155,6 @@ public class InstructionService extends Service {
             if (intent.hasExtra(EXTRA_FALL_MODE)) {
                 String fmRaw = intent.getStringExtra(EXTRA_FALL_MODE);
                 if (fmRaw != null && !fmRaw.trim().isEmpty()) {
-                    // [FALL-RETRY] parseo "AWAIT:1" → fallMode="AWAIT", fallRetry=1
                     String upper = fmRaw.trim().toUpperCase(Locale.ROOT);
                     String[] parts = upper.split(":", 2);
                     fallMode = parts[0];
@@ -127,7 +172,7 @@ public class InstructionService extends Service {
         // ── Fase CHECK: preguntar y encadenar escucha (sin wakeword) ──
         if ("CHECK".equals(fallMode)) {
             String prompt = "Escuché un golpe. ¿Estás bien?";
-            sayThenListenHere(prompt, "AWAIT:0"); // [FALL-RETRY] arranca con retry=0
+            sayThenListenHere(prompt, "AWAIT:0");
             stopSelf();
             return;
         }
@@ -155,24 +200,18 @@ public class InstructionService extends Service {
         // --- VAD ADAPTATIVO previo a STT ---
         int minVoicedMs =
                 ("AWAIT".equals(fallMode) || "AWAIT_ACTION".equals(fallMode) || "CHECK".equals(fallMode))
-                        ? 220   // respuestas cortas
-                        : 320;  // comandos normales
+                        ? 220
+                        : 320;
 
         if (!hasEnoughVoice(wav, cfg.silenceDbfs, minVoicedMs)) {
             Log.d(TAG, "VAD: silencio o voz insuficiente");
-            // [FALL-RETRY] AWAIT: si no hubo respuesta → repregunta una vez; si ya repreguntó → avisa.
             if ("AWAIT".equals(fallMode)) {
                 if (fallRetry <= 0) {
-                    Log.d(TAG, "[FALL-RETRY] AWAIT sin respuesta → repregunto (retry=1)");
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
-                    Log.d(TAG, "[FALL-RETRY] AWAIT sin respuesta por segunda vez → envío a contacto de emergencia");
                     boolean ok = sendEmergencyMessageToEmergencyContact();
-                    if (ok) {
-                        sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
-                    } else {
-                        sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
-                    }
+                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
+                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
                 }
                 try { wav.delete(); } catch (Exception ignore) {}
                 stopSelf();
@@ -187,21 +226,64 @@ public class InstructionService extends Service {
         // --- fin VAD ---
 
         String transcript = "";
-        try {
-            APIService api = RetrofitClient.api();
-            RequestBody fileBody = RequestBody.create(wav, MediaType.parse("audio/wav"));
-            MultipartBody.Part audioPart = MultipartBody.Part.createFormData("audio", wav.getName(), fileBody);
-            Call<TranscriptionResponse> call = api.transcribe(audioPart, null, null);
-            Response<TranscriptionResponse> resp = call.execute();
 
-            if (resp.isSuccessful() && resp.body() != null) {
-                transcript = resp.body().text != null ? resp.body().text.trim() : "";
-                Log.d(TAG, "INSTRUCCIÓN (backend STT): " + transcript);
+        try {
+            final boolean inFallPhase = "AWAIT".equals(fallMode) || "AWAIT_ACTION".equals(fallMode);
+
+            if (inFallPhase) {
+                try {
+                    LocalStt.init(this);
+                    String gram = LocalStt.transcribeFile(wav, LocalStt.AWAIT_GRAMMAR);
+                    if (!gram.isEmpty()) {
+                        transcript = gram;
+                        Log.d(TAG, "INSTRUCCIÓN (local STT, grammar): " + transcript);
+                    } else {
+                        String free = LocalStt.transcribeFile(wav, null);
+                        transcript = free == null ? "" : free.trim();
+                        Log.d(TAG, "INSTRUCCIÓN (local STT, libre): " + transcript);
+                    }
+                } catch (Exception le) { // IOException si querés ser estricto
+                    Log.e(TAG, "STT local falló en modo caída", le);
+                    transcript = "";
+                }
             } else {
-                Log.e(TAG, "Transcribe error HTTP: " + (resp != null ? resp.code(): -1));
+                // === FLUJO NORMAL: LOCAL-FIRST; remoto solo si queda vacío y está permitido ===
+                try {
+                    LocalStt.init(this);
+                    String free = LocalStt.transcribeFile(wav, null);
+                    transcript = free == null ? "" : free.trim();
+                    Log.d(TAG, "INSTRUCCIÓN (local STT): " + transcript);
+                } catch (Exception le) {
+                    Log.e(TAG, "STT local falló", le);
+                    transcript = "";
+                }
+
+                boolean needRemote = transcript.isEmpty() || transcript.length() < 3;
+                if (needRemote && NetBreaker.allow(this)) {
+                    try {
+                        APIService apiFast = RetrofitClient.apiFast();
+                        RequestBody fileBody = RequestBody.create(wav, MediaType.parse("audio/wav"));
+                        MultipartBody.Part audioPart = MultipartBody.Part.createFormData("audio", wav.getName(), fileBody);
+                        Response<TranscriptionResponse> resp = apiFast.transcribe(audioPart, null, null).execute();
+                        if (resp.isSuccessful() && resp.body() != null) {
+                            String t = resp.body().text != null ? resp.body().text.trim() : "";
+                            if (!t.isEmpty()) {
+                                transcript = t;
+                                NetBreaker.success();
+                                Log.d(TAG, "INSTRUCCIÓN (backend STT): " + transcript);
+                            } else {
+                                NetBreaker.fail();
+                            }
+                        } else {
+                            NetBreaker.fail();
+                            Log.e(TAG, "Transcribe error HTTP: " + (resp != null ? resp.code() : -1));
+                        }
+                    } catch (Exception e) {
+                        NetBreaker.fail();
+                        Log.e(TAG, "Error llamando al backend STT", e);
+                    }
+                }
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Error llamando al backend STT", e);
         } finally {
             try { wav.delete(); } catch (Exception ignored) {}
         }
@@ -210,34 +292,24 @@ public class InstructionService extends Service {
         if ("AWAIT".equals(fallMode)) {
             String norm = normEs(transcript);
 
-            // [FALL-RETRY] Nada reconocido → repregunta la primera vez; segunda vez envía
             if (norm.isEmpty()) {
                 if (fallRetry <= 0) {
-                    Log.d(TAG, "[FALL-RETRY] AWAIT transcripción vacía → repregunto (retry=1)");
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
-                    Log.d(TAG, "[FALL-RETRY] AWAIT transcripción vacía (2da) → envío a contacto de emergencia");
                     boolean ok = sendEmergencyMessageToEmergencyContact();
-                    if (ok) {
-                        sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
-                    } else {
-                        sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
-                    }
+                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
+                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
                 }
                 stopSelf();
                 return;
             }
 
-            // Nueva resolución explícita
             FallReply fr = assessFallReply(norm);
             switch (fr) {
                 case HELP: {
                     boolean ok = sendEmergencyMessageToEmergencyContact();
-                    if (ok) {
-                        sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 8000);
-                    } else {
-                        sayViaWakeService("Quise avisar a " + EMERGENCY_NAME + " pero no pude enviar el mensaje.", 10000);
-                    }
+                    if (ok) sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 8000);
+                    else    sayViaWakeService("Quise avisar a " + EMERGENCY_NAME + " pero no pude enviar el mensaje.", 10000);
                     stopSelf();
                     return;
                 }
@@ -248,7 +320,6 @@ public class InstructionService extends Service {
                 }
                 case UNKNOWN:
                 default: {
-                    // Ambiguo → repregunta corta, mantiene el mismo retry (no cuenta como “sin respuesta”)
                     sayThenListenHere("No me quedó claro. ¿Estás bien?", "AWAIT:" + fallRetry);
                     stopSelf();
                     return;
@@ -264,7 +335,6 @@ public class InstructionService extends Service {
         }
 
         // === FALL TRIGGER GLOBAL ===
-        // Cualquier mención de ayuda/caída → primero preguntar y entrar a AWAIT con retry=0.
         String normAll = normEs(transcript);
         if (saysHelp(normAll) || mentionsFall(normAll)) {
             Log.d(TAG, "Fall trigger (global): ayuda/caída detectada → preguntar primero");
@@ -342,20 +412,29 @@ public class InstructionService extends Service {
         }
         // ==== Fin alarmas ====
 
-        // 3) NLU remoto con fallback local
+        // 3) NLU remoto con fallback local (gobernado por breaker)
         String intentName = null;
         com.example.toto_app.network.NluRouteResponse nres = null;
-        try {
-            com.example.toto_app.network.NluRouteRequest nreq = new com.example.toto_app.network.NluRouteRequest();
-            nreq.text = transcript;
-            nreq.locale = "es-AR";
-            nreq.context = null;
-            nreq.hints = null;
-            retrofit2.Response<com.example.toto_app.network.NluRouteResponse> rNlu =
-                    RetrofitClient.api().nluRoute(nreq).execute();
-            if (rNlu.isSuccessful()) nres = rNlu.body();
-        } catch (Exception e) {
-            Log.e(TAG, "Error llamando /api/nlu/route", e);
+
+        if (NetBreaker.allow(this)) {
+            try {
+                com.example.toto_app.network.NluRouteRequest nreq = new com.example.toto_app.network.NluRouteRequest();
+                nreq.text = transcript;
+                nreq.locale = "es-AR";
+                nreq.context = null;
+                nreq.hints = null;
+                retrofit2.Response<com.example.toto_app.network.NluRouteResponse> rNlu =
+                        RetrofitClient.apiFast().nluRoute(nreq).execute();
+                if (rNlu.isSuccessful()) {
+                    nres = rNlu.body();
+                    NetBreaker.success();
+                } else {
+                    NetBreaker.fail();
+                }
+            } catch (Exception e) {
+                NetBreaker.fail();
+                Log.e(TAG, "Error llamando /api/nlu/route", e);
+            }
         }
 
         if (nres != null) {
@@ -365,7 +444,7 @@ public class InstructionService extends Service {
                     + " slots=" + slotsToString(nres.slots)
                     + " ack=" + safe(nres.ack_tts));
         } else {
-            Log.d(TAG, "NLU/route → nres=null");
+            Log.d(TAG, "NLU/route → nres=null (usando router local)");
         }
 
         if (nres != null && nres.intent != null && !nres.intent.trim().isEmpty()) {
@@ -631,18 +710,28 @@ public class InstructionService extends Service {
             case "ANSWER":
             case "UNKNOWN":
             default: {
-                try {
-                    com.example.toto_app.network.AskRequest rq = new com.example.toto_app.network.AskRequest();
-                    rq.prompt = transcript;
-                    retrofit2.Response<com.example.toto_app.network.AskResponse> r2 =
-                            RetrofitClient.api().ask(rq).execute();
-                    String reply = (r2.isSuccessful() && r2.body() != null && r2.body().reply != null)
-                            ? r2.body().reply.trim()
-                            : "No estoy seguro, ¿podés repetir?";
-                    sayViaWakeService(sanitizeForTTS(reply), 12000);
-                } catch (Exception ex) {
-                    Log.e(TAG, "Error /api/ask", ex);
-                    sayViaWakeService("Tuve un problema procesando eso.", 8000);
+                // Pregunta abierta: sólo si el backend está OK.
+                if (NetBreaker.allow(this)) {
+                    try {
+                        com.example.toto_app.network.AskRequest rq = new com.example.toto_app.network.AskRequest();
+                        rq.prompt = transcript;
+                        retrofit2.Response<com.example.toto_app.network.AskResponse> r2 =
+                                RetrofitClient.apiFast().ask(rq).execute();
+                        if (r2.isSuccessful() && r2.body() != null && r2.body().reply != null) {
+                            NetBreaker.success();
+                            String reply = r2.body().reply.trim();
+                            sayViaWakeService(sanitizeForTTS(reply), 12000);
+                        } else {
+                            NetBreaker.fail();
+                            sayViaWakeService("Ahora no tengo conexión para responder eso.", 6000);
+                        }
+                    } catch (Exception ex) {
+                        NetBreaker.fail();
+                        Log.e(TAG, "Error /api/ask", ex);
+                        sayViaWakeService("Ahora no tengo conexión para responder eso.", 6000);
+                    }
+                } else {
+                    sayViaWakeService("Ahora no tengo conexión para responder eso.", 6000);
                 }
                 stopSelf();
                 return;
@@ -659,7 +748,6 @@ public class InstructionService extends Service {
                 .putExtra(WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true)
                 .putExtra(WakeWordService.EXTRA_AFTER_SAY_USER_NAME, userName);
         if (nextFallMode != null) {
-            // [FALL-RETRY] Pasamos "AWAIT:0" o "AWAIT:1" en el MISMO extra que ya reinyecta WakeWordService
             say.putExtra(WakeWordService.EXTRA_AFTER_SAY_FALL_MODE, nextFallMode);
         }
         androidx.core.content.ContextCompat.startForegroundService(this, say);
@@ -677,7 +765,6 @@ public class InstructionService extends Service {
         return " " + s + " ";
     }
 
-
     // Clasificación de la respuesta en AWAIT
     private enum FallReply { OK, HELP, UNKNOWN }
 
@@ -687,19 +774,18 @@ public class InstructionService extends Service {
                 && !norm.contains(" no te preocupes ")
                 && !norm.contains(" no hay problema ")
                 && !norm.contains(" no gracias ")
-                && !saysOk(norm); // solo cuenta si NO hay señales de OK
+                && !saysOk(norm);
     }
 
     private static FallReply assessFallReply(String norm) {
-        if (saysHelp(norm)) return FallReply.HELP;     // negativo fuerte
-        if (saysOk(norm))   return FallReply.OK;       // positivo claro
-        if (mentionsFall(norm)) return FallReply.HELP; // “me caí” sin aclarar
-        if (hasStandaloneNo(norm)) return FallReply.HELP; // “no” suelto
+        if (saysHelp(norm)) return FallReply.HELP;
+        if (saysOk(norm))   return FallReply.OK;
+        if (mentionsFall(norm)) return FallReply.HELP;
+        if (hasStandaloneNo(norm)) return FallReply.HELP;
         return FallReply.UNKNOWN;
     }
 
     private static boolean saysOk(String norm) {
-        // Negativos fuertes anulan OK
         if (norm.contains(" no me puedo mover ")
                 || norm.contains(" no puedo levantarme ") || norm.contains(" no puedo pararme ")
                 || norm.contains(" estoy mal ")
@@ -707,14 +793,11 @@ public class InstructionService extends Service {
                 || norm.contains(" me lastime ") || norm.contains(" me lastimé ")) {
             return false;
         }
-
-        // "no estoy bien" o "no esta bien" (sin puntuación intermedia) => NO OK
         if (norm.matches(".*\\bno\\s+estoy\\s+bien\\b.*")) return false;
         if (norm.matches(".*\\bno\\s+esta\\s+bien\\b.*")) return false;
 
-        // Señales explícitas de OK (1ª o 3ª persona / impersonal)
-        if (norm.contains(" estoy bien ")
-                || norm.contains(" esta bien ")           // <- clave para "no, no, está bien"
+        return norm.contains(" estoy bien ")
+                || norm.contains(" esta bien ")
                 || norm.contains(" esta todo bien ")
                 || norm.contains(" todo bien ")
                 || norm.contains(" todo ok ")
@@ -726,19 +809,12 @@ public class InstructionService extends Service {
                 || norm.contains(" no hay problema ")
                 || norm.contains(" no estoy mal ")
                 || norm.contains(" no me paso nada ") || norm.contains(" no me pasó nada ")
-                || norm.matches(".*\\b(si|sí)\\b.*")) {
-            return true;
-        }
-
-        return false;
+                || norm.matches(".*\\b(si|sí)\\b.*");
     }
-
-
-
 
     private static boolean saysHelp(String norm) {
         return norm.contains(" no estoy bien ")
-                || norm.contains(" no esta bien ")   // <- agregado
+                || norm.contains(" no esta bien ")
                 || norm.contains(" estoy mal ")
                 || norm.contains(" me duele ")
                 || norm.contains(" me lastime ") || norm.contains(" me lastimé ")
@@ -748,7 +824,6 @@ public class InstructionService extends Service {
                 || norm.contains(" auxilio ") || norm.contains(" emergencia ") || norm.contains(" ambulancia ")
                 || norm.contains(" doctor ") || norm.contains(" medico ") || norm.contains(" médico ");
     }
-
 
     private static boolean mentionsFall(String norm) {
         return norm.contains(" me cai ") || norm.contains(" me caí ")
@@ -943,8 +1018,7 @@ public class InstructionService extends Service {
                 int b1 = buf[index + 1] & 0xFF;
                 int b2 = buf[index + 2];
                 int v = (b2 << 16) | (b1 << 8) | b0;
-                // sign extend
-                if ((v & 0x00800000) != 0) v |= 0xFF000000;
+                if ((v & 0x00800000) != 0) v |= 0xFF000000; // sign extend
                 return v / 8388608.0;
             }
             case 4: { // 32-bit signed PCM
@@ -956,7 +1030,6 @@ public class InstructionService extends Service {
                 return v / 2147483648.0;
             }
             default:
-                // formato raro → mejor no bloquear
                 return 0.0;
         }
     }
@@ -1314,14 +1387,12 @@ public class InstructionService extends Service {
         return String.join(" ", parts);
     }
 
-    /** ¿El usuario dijo un número de teléfono? (muy laxo) */
     private static boolean looksLikePhoneNumber(String s) {
         if (s == null) return false;
         String t = s.replaceAll("[^0-9+]", "");
         return t.length() >= 6;
     }
 
-    /** Deja solo dígitos y + para discado */
     private static String normalizeDialable(String s) {
         if (s == null) return "";
         return s.replaceAll("[^0-9+]", "");
