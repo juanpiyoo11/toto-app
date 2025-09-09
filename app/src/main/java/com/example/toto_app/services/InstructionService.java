@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.app.role.RoleManager;
 import android.app.KeyguardManager;
+import android.app.ActivityManager;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.net.Uri;
@@ -44,6 +45,7 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.Executors;
+import java.util.List;
 
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
@@ -71,7 +73,7 @@ public class InstructionService extends Service {
 
     // ===== Contacto de emergencia (por ahora hardcodeado) =====
     private static final String EMERGENCY_NAME   = "Tamara";
-    private static final String EMERGENCY_NUMBER = "+5491158550932";
+    private static final String EMERGENCY_NUMBER = "+5491159753115";
     private static String buildEmergencyText(String userName) {
         String u = (userName == null || userName.isBlank()) ? "la persona" : userName;
         return "⚠️ Alerta: " + u + " puede haberse caído o pidió ayuda. "
@@ -264,7 +266,6 @@ public class InstructionService extends Service {
         }
 
         // === FALL TRIGGER GLOBAL ===
-        // Cualquier mención de ayuda/caída → primero preguntar y entrar a AWAIT con retry=0.
         String normAll = normEs(transcript);
         if (saysHelp(normAll) || mentionsFall(normAll)) {
             Log.d(TAG, "Fall trigger (global): ayuda/caída detectada → preguntar primero");
@@ -416,11 +417,20 @@ public class InstructionService extends Service {
             }
         }
 
-        if (nres != null && nres.needs_confirmation && nres.clarifying_question != null
+        if (nres != null && nres.needs_confirmation
+                && nres.clarifying_question != null
                 && !nres.clarifying_question.trim().isEmpty()) {
-            sayViaWakeService(sanitizeForTTS(nres.clarifying_question.trim()), 8000);
-            stopSelf();
-            return;
+
+            boolean actionable =
+                    "SET_ALARM".equals(intentName) ||
+                            "CALL".equals(intentName) ||
+                            "SEND_MESSAGE".equals(intentName);
+
+            if (actionable) {
+                sayViaWakeService(sanitizeForTTS(nres.clarifying_question.trim()), 8000);
+                stopSelf();
+                return;
+            }
         }
 
         // 4) Ejecutar intención
@@ -502,9 +512,18 @@ public class InstructionService extends Service {
                     return;
                 }
 
+                // === NUEVO: si la app NO está en primer plano, comportarse como bloqueado → notificación para tocar ===
+                if (!isAppInForeground()) {
+                    showCallNotification(rc.name, rc.number);
+                    sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 10000);
+                    postWatchdog(8000);
+                    stopSelf();
+                    return;
+                }
+
                 if (isDeviceLocked()) {
                     showCallNotification(rc.name, rc.number);
-                    sayViaWakeService("Desbloqueá y tocá la notificación para llamar a " + rc.name + ". O pedímelo de nuevo con el celu desbloqueado.", 12000);
+                    sayViaWakeService("Desbloqueá y tocá la notificación para llamar a " + rc.name + ".", 12000);
                     postWatchdog(8000);
                     stopSelf();
                     return;
@@ -515,11 +534,9 @@ public class InstructionService extends Service {
                         == android.content.pm.PackageManager.PERMISSION_GRANTED;
 
                 if (!hasCall && !isDefaultDialer()) {
-                    sayViaWakeService("Necesito permiso de llamadas para marcar directamente. Abrí la app para darlo.", 10000);
-                    Intent perm = new Intent(this, com.example.toto_app.MainActivity.class)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            .putExtra("request_call_phone_perm", true);
-                    startActivity(perm);
+                    // en este escenario también preferimos notificación tocable
+                    showCallNotification(rc.name, rc.number);
+                    sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 12000);
                     postWatchdog(8000);
                     stopSelf();
                     return;
@@ -650,6 +667,33 @@ public class InstructionService extends Service {
         }
     }
 
+    // === NUEVO: detectar si la app está en primer plano ===
+    private boolean isAppInForeground() {
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (am == null) return false;
+            List<ActivityManager.RunningAppProcessInfo> procs = am.getRunningAppProcesses();
+            if (procs == null) return false;
+            final String myPkg = getPackageName();
+            for (ActivityManager.RunningAppProcessInfo p : procs) {
+                if (p == null || p.pkgList == null) continue;
+                boolean isMine = false;
+                for (String pkg : p.pkgList) {
+                    if (myPkg.equals(pkg)) { isMine = true; break; }
+                }
+                if (!isMine) continue;
+                int imp = p.importance;
+                if (imp == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                        || imp == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
+                    return true;
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "isAppInForeground() fallo, asumo background", t);
+        }
+        return false;
+    }
+
     // ==== Helpers de flujo de caída ====
 
     private void sayThenListenHere(String text, @Nullable String nextFallMode) {
@@ -677,8 +721,6 @@ public class InstructionService extends Service {
         return " " + s + " ";
     }
 
-
-    // Clasificación de la respuesta en AWAIT
     private enum FallReply { OK, HELP, UNKNOWN }
 
     private static boolean hasStandaloneNo(String norm) {
@@ -691,15 +733,14 @@ public class InstructionService extends Service {
     }
 
     private static FallReply assessFallReply(String norm) {
-        if (saysHelp(norm)) return FallReply.HELP;     // negativo fuerte
-        if (saysOk(norm))   return FallReply.OK;       // positivo claro
-        if (mentionsFall(norm)) return FallReply.HELP; // “me caí” sin aclarar
-        if (hasStandaloneNo(norm)) return FallReply.HELP; // “no” suelto
+        if (saysHelp(norm)) return FallReply.HELP;
+        if (saysOk(norm))   return FallReply.OK;
+        if (mentionsFall(norm)) return FallReply.HELP;
+        if (hasStandaloneNo(norm)) return FallReply.HELP;
         return FallReply.UNKNOWN;
     }
 
     private static boolean saysOk(String norm) {
-        // Negativos fuertes anulan OK
         if (norm.contains(" no me puedo mover ")
                 || norm.contains(" no puedo levantarme ") || norm.contains(" no puedo pararme ")
                 || norm.contains(" estoy mal ")
@@ -707,14 +748,10 @@ public class InstructionService extends Service {
                 || norm.contains(" me lastime ") || norm.contains(" me lastimé ")) {
             return false;
         }
-
-        // "no estoy bien" o "no esta bien" (sin puntuación intermedia) => NO OK
         if (norm.matches(".*\\bno\\s+estoy\\s+bien\\b.*")) return false;
         if (norm.matches(".*\\bno\\s+esta\\s+bien\\b.*")) return false;
-
-        // Señales explícitas de OK (1ª o 3ª persona / impersonal)
         if (norm.contains(" estoy bien ")
-                || norm.contains(" esta bien ")           // <- clave para "no, no, está bien"
+                || norm.contains(" esta bien ")
                 || norm.contains(" esta todo bien ")
                 || norm.contains(" todo bien ")
                 || norm.contains(" todo ok ")
@@ -729,16 +766,12 @@ public class InstructionService extends Service {
                 || norm.matches(".*\\b(si|sí)\\b.*")) {
             return true;
         }
-
         return false;
     }
 
-
-
-
     private static boolean saysHelp(String norm) {
         return norm.contains(" no estoy bien ")
-                || norm.contains(" no esta bien ")   // <- agregado
+                || norm.contains(" no esta bien ")
                 || norm.contains(" estoy mal ")
                 || norm.contains(" me duele ")
                 || norm.contains(" me lastime ") || norm.contains(" me lastimé ")
@@ -749,7 +782,6 @@ public class InstructionService extends Service {
                 || norm.contains(" doctor ") || norm.contains(" medico ") || norm.contains(" médico ");
     }
 
-
     private static boolean mentionsFall(String norm) {
         return norm.contains(" me cai ") || norm.contains(" me caí ")
                 || norm.contains(" me caigo ") || norm.contains(" me estoy cayendo ")
@@ -759,7 +791,7 @@ public class InstructionService extends Service {
                 || norm.contains(" me desmaye ") || norm.contains(" me desmayé ");
     }
 
-    // --- VAD adaptativo y parser WAV robusto ---
+    // --- VAD / WAV helpers (sin cambios) ---
     private static class WavInfo {
         int sampleRate;
         int channels;
@@ -928,26 +960,24 @@ public class InstructionService extends Service {
     }
 
     private static double sampleToFloat(byte[] buf, int index, int bytesPerSample) {
-        // little-endian
         switch (bytesPerSample) {
-            case 1: // 8-bit unsigned PCM
+            case 1:
                 int u = buf[index] & 0xFF;
                 return ((u - 128) / 128.0);
-            case 2: // 16-bit signed PCM
+            case 2:
                 int lo = buf[index] & 0xFF;
                 int hi = buf[index + 1];
                 short s = (short)((hi << 8) | lo);
                 return s / 32768.0;
-            case 3: { // 24-bit signed PCM
+            case 3: {
                 int b0 = buf[index] & 0xFF;
                 int b1 = buf[index + 1] & 0xFF;
                 int b2 = buf[index + 2];
                 int v = (b2 << 16) | (b1 << 8) | b0;
-                // sign extend
                 if ((v & 0x00800000) != 0) v |= 0xFF000000;
                 return v / 8388608.0;
             }
-            case 4: { // 32-bit signed PCM
+            case 4: {
                 int b0 = buf[index] & 0xFF;
                 int b1 = buf[index + 1] & 0xFF;
                 int b2 = buf[index + 2] & 0xFF;
@@ -956,11 +986,10 @@ public class InstructionService extends Service {
                 return v / 2147483648.0;
             }
             default:
-                // formato raro → mejor no bloquear
                 return 0.0;
         }
     }
-    // --- fin VAD ---
+    // --- fin VAD / WAV helpers ---
 
     private void handleAlarmResult(DeviceActions.AlarmResult res, String when) {
         switch (res) {
@@ -1274,7 +1303,6 @@ public class InstructionService extends Service {
                 || s.contains(" programame una alarma ");
     }
 
-    // Sanitizador de texto para TTS
     private static String sanitizeForTTS(String s) {
         if (s == null) return "";
         String out = s;
@@ -1314,14 +1342,12 @@ public class InstructionService extends Service {
         return String.join(" ", parts);
     }
 
-    /** ¿El usuario dijo un número de teléfono? (muy laxo) */
     private static boolean looksLikePhoneNumber(String s) {
         if (s == null) return false;
         String t = s.replaceAll("[^0-9+]", "");
         return t.length() >= 6;
     }
 
-    /** Deja solo dígitos y + para discado */
     private static String normalizeDialable(String s) {
         if (s == null) return "";
         return s.replaceAll("[^0-9+]", "");
