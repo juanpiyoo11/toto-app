@@ -25,8 +25,7 @@ public final class RetrofitClient {
                             .build();
 
                     Retrofit r = new Retrofit.Builder()
-                            .baseUrl(BuildConfig.BACKEND_BASE_URL) // debe terminar en '/'
-//                          .baseUrl(BuildConfig.TOTO_API_BASE)     // (si preferís este nombre)
+                            .baseUrl(BuildConfig.BACKEND_BASE_URL)
                             .client(client)
                             .addConverterFactory(GsonConverterFactory.create())
                             .build();
