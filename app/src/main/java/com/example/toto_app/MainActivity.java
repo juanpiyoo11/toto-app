@@ -54,6 +54,29 @@ public class MainActivity extends AppCompatActivity {
             i.putExtra(FallSignals.EXTRA_USER_NAME, "Juan");
             sendBroadcast(i);
         });
+
+        Button btnPause = findViewById(R.id.btnPauseListening);
+        btnPause.setOnClickListener(v -> {
+            Intent i = new Intent(this, WakeWordService.class);
+            i.setAction(WakeWordService.ACTION_PAUSE_LISTEN);
+            ContextCompat.startForegroundService(this, i);
+            Toast.makeText(this, "Toto en pausa (no escucha)", Toast.LENGTH_SHORT).show();
+        });
+
+        Button btnResume = findViewById(R.id.btnResumeListening);
+        btnResume.setOnClickListener(v -> {
+            Intent i = new Intent(this, WakeWordService.class);
+            i.setAction(WakeWordService.ACTION_RESUME_LISTEN);
+            ContextCompat.startForegroundService(this, i);
+            Toast.makeText(this, "Toto volvió a escuchar", Toast.LENGTH_SHORT).show();
+        });
+
+        Button btnStopTts = findViewById(R.id.btnStopTts);
+        btnStopTts.setOnClickListener(v -> {
+            Intent i = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_STOP_TTS);
+            startService(i);
+        });
+
         // Pide permisos base y arranca Toto
         requestNeededPermissionsAndStart();
 
