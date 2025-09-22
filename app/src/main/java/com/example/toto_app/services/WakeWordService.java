@@ -1,3 +1,4 @@
+// WakeWordService.java
 package com.example.toto_app.services;
 
 import android.app.Notification;
@@ -39,8 +40,15 @@ import java.util.Random;
 
 public class WakeWordService extends Service implements RecognitionListener {
 
-    public static final String ACTION_CMD_FINISHED = "com.example.toto_app.ACTION_CMD_FINISHED";
-    public static final String ACTION_SAY = "com.example.toto_app.ACTION_SAY";
+    public static final String ACTION_CMD_FINISHED  = "com.example.toto_app.ACTION_CMD_FINISHED";
+    public static final String ACTION_SAY           = "com.example.toto_app.ACTION_SAY";
+
+    // Control de escucha (ya existentes)
+    public static final String ACTION_PAUSE_LISTEN  = "com.example.toto_app.ACTION_PAUSE_LISTEN";
+    public static final String ACTION_RESUME_LISTEN = "com.example.toto_app.ACTION_RESUME_LISTEN";
+
+    // NUEVO: cortar TTS en curso
+    public static final String ACTION_STOP_TTS      = "com.example.toto_app.ACTION_STOP_TTS";
 
     public static final String EXTRA_AFTER_SAY_START_SERVICE = "after_say_start_service";
     public static final String EXTRA_AFTER_SAY_USER_NAME     = "after_say_user_name";
@@ -50,11 +58,11 @@ public class WakeWordService extends Service implements RecognitionListener {
     private static final String TAG = "WakeWord";
     private static final String CHANNEL_ID = "toto_listening";
 
-    private static final long MIN_COOLDOWN_MS = 1500;
-    private static final long DEDUPE_WINDOW_MS = 2500;
+    private static final long MIN_COOLDOWN_MS   = 1500;
+    private static final long DEDUPE_WINDOW_MS  = 2500;
 
-    private long lastTriggerAt = 0L;
-    private long lastDetectionAt = 0L;
+    private long   lastTriggerAt     = 0L;
+    private long   lastDetectionAt   = 0L;
     private String lastDetectionText = "";
     private volatile boolean triggered = false;
 
@@ -71,6 +79,12 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     private PowerManager.WakeLock wakeLock;
     @Nullable private AudioFocusRequest audioFocusRequest;
+
+    // Estado de pausa de escucha
+    private volatile boolean listeningPaused = false;
+
+    // NUEVO: “tipo” de lo que se está diciendo ahora ("ACK" o "SAY")
+    @Nullable private String currentUtteranceKind = null;
 
     private static final String[] ACK_TEMPLATES = new String[] {
             "¿En qué te puedo ayudar, %s?",
@@ -106,6 +120,10 @@ public class WakeWordService extends Service implements RecognitionListener {
             triggered = false;
             lastDetectionText = "";
             lastDetectionAt = 0L;
+            if (listeningPaused) {
+                Log.d(TAG, "Wake en pausa → no rearmo escucha");
+                return;
+            }
             startWakeListening();
         }
     };
@@ -122,14 +140,7 @@ public class WakeWordService extends Service implements RecognitionListener {
         }
 
         createChannel();
-
-        Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Toto escuchando")
-                .setContentText("Decí \"Toto\" para activar")
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                .setOngoing(true)
-                .build();
-        startForeground(1001, notif);
+        updateForegroundNotification("Escuchando \"Toto\"");
 
         LibVosk.setLogLevel(LogLevel.WARNINGS);
         initTTS();
@@ -185,14 +196,15 @@ public class WakeWordService extends Service implements RecognitionListener {
                     }
                     @Override public void onDone(String utteranceId) {
                         new android.os.Handler(getMainLooper()).post(() -> {
-                            if (utteranceId != null && utteranceId.startsWith("toto_ack_")) {
-                                isSpeaking = false;
-                                abandonAudioFocus();
-                                startInstructionService(); // flujo normal tras “Toto”
-                            } else if (utteranceId != null && utteranceId.startsWith("toto_say_")) {
-                                isSpeaking = false;
-                                abandonAudioFocus();
-                                // NUEVO: si hay encadenado, lanzamos ese servicio. Si no, rearmamos wake.
+                            String kind = currentUtteranceKind;
+                            // Reset locales de TTS
+                            currentUtteranceKind = null;
+                            isSpeaking = false;
+                            abandonAudioFocus();
+
+                            if ("ACK".equals(kind)) {
+                                startInstructionService();
+                            } else { // SAY o null
                                 if (pendingAfterSay != null) {
                                     try { startService(pendingAfterSay); } catch (Exception ignored) {}
                                     pendingAfterSay = null;
@@ -200,7 +212,12 @@ public class WakeWordService extends Service implements RecognitionListener {
                                     triggered = false;
                                     lastDetectionText = "";
                                     lastDetectionAt = 0L;
-                                    startWakeListening();
+                                    if (!listeningPaused) {
+                                        startWakeListening();
+                                    } else {
+                                        Log.d(TAG, "Fin TTS: en pausa → no rearmo");
+                                        updateForegroundNotification("Pausa: no estoy escuchando");
+                                    }
                                 }
                             }
                         });
@@ -218,6 +235,13 @@ public class WakeWordService extends Service implements RecognitionListener {
         try {
             stopListening();
             if (model == null) return;
+
+            if (listeningPaused) {
+                Log.d(TAG, "startWakeListening: en pausa → no inicio reconocimiento");
+                updateForegroundNotification("Pausa: no estoy escuchando");
+                return;
+            }
+
             Recognizer rec = new Recognizer(model, 16000.0f);
             rec.setGrammar("[\"toto\"]");
             speechService = new SpeechService(rec, 16000.0f);
@@ -225,6 +249,7 @@ public class WakeWordService extends Service implements RecognitionListener {
             requestAudioFocus();
             acquireWakeLock();
             Log.d(TAG, "Wake listening iniciado");
+            updateForegroundNotification("Escuchando \"Toto\"");
         } catch (Exception e) {
             Log.e(TAG, "startWakeListening error", e);
             stopSelf();
@@ -308,7 +333,9 @@ public class WakeWordService extends Service implements RecognitionListener {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null) {
-            if (ACTION_SAY.equals(intent.getAction())) {
+            String action = intent.getAction();
+
+            if (ACTION_SAY.equals(action)) {
                 String toSay = intent.getStringExtra("text");
                 boolean chain = intent.getBooleanExtra(EXTRA_AFTER_SAY_START_SERVICE, false);
                 if (chain) {
@@ -327,6 +354,23 @@ public class WakeWordService extends Service implements RecognitionListener {
                 }
                 return START_NOT_STICKY;
             }
+
+            // Pausar/Reanudar escucha
+            if (ACTION_PAUSE_LISTEN.equals(action)) {
+                pauseListening();
+                return START_STICKY;
+            }
+            if (ACTION_RESUME_LISTEN.equals(action)) {
+                resumeListening();
+                return START_STICKY;
+            }
+
+            // NUEVO: cortar TTS en curso
+            if (ACTION_STOP_TTS.equals(action)) {
+                stopSpeaking();
+                return START_STICKY;
+            }
+
             if (intent.hasExtra("user_name")) {
                 String incoming = intent.getStringExtra("user_name");
                 if (incoming != null && !incoming.trim().isEmpty()) {
@@ -397,6 +441,7 @@ public class WakeWordService extends Service implements RecognitionListener {
             String utteranceId = "toto_ack_" + System.currentTimeMillis();
             stopListening();
             isSpeaking = true;
+            currentUtteranceKind = "ACK";
             tts.speak(s, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
         } else {
             startInstructionService();
@@ -416,6 +461,16 @@ public class WakeWordService extends Service implements RecognitionListener {
         }
     }
 
+    private void updateForegroundNotification(String contentText) {
+        Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Toto")
+                .setContentText(contentText)
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setOngoing(true)
+                .build();
+        startForeground(1001, notif);
+    }
+
     private void speakText(String text) {
         stopListening();
         if (ttsReady && tts != null) {
@@ -423,13 +478,61 @@ public class WakeWordService extends Service implements RecognitionListener {
             Bundle params = new Bundle();
             String utteranceId = "toto_say_" + System.currentTimeMillis();
             isSpeaking = true;
+            currentUtteranceKind = "SAY";
             tts.speak(s, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
         } else {
             Log.w(TAG, "TTS no listo para hablar");
         }
     }
 
-    // --- Preprocesado simple de puntuación para TTS ---
+    // NUEVO: cortar TTS actual sin alterar el “estado” lógico
+    private void stopSpeaking() {
+        if (tts == null || !isSpeaking) {
+            Log.d(TAG, "stopSpeaking: no hay TTS en curso");
+            return;
+        }
+        String kind = currentUtteranceKind; // snapshot
+        try { tts.stop(); } catch (Exception ignored) {}
+        currentUtteranceKind = null;
+        isSpeaking = false;
+        abandonAudioFocus();
+
+        if ("ACK".equals(kind)) {
+            // Continuamos el flujo normal post-ACK: pasar a InstructionService
+            startInstructionService();
+        } else {
+            // Flujo post-respuesta
+            if (pendingAfterSay != null) {
+                try { startService(pendingAfterSay); } catch (Exception ignored) {}
+                pendingAfterSay = null;
+            } else {
+                triggered = false;
+                lastDetectionText = "";
+                lastDetectionAt = 0L;
+                if (!listeningPaused) {
+                    startWakeListening();
+                } else {
+                    updateForegroundNotification("Pausa: no estoy escuchando");
+                }
+            }
+        }
+    }
+
+    // Pausar/Reanudar escucha
+    private void pauseListening() {
+        listeningPaused = true;
+        stopListening();
+        updateForegroundNotification("Pausa: no estoy escuchando");
+        Log.d(TAG, "Wake pausado por acción de usuario");
+    }
+
+    private void resumeListening() {
+        listeningPaused = false;
+        Log.d(TAG, "Wake reanudado por acción de usuario");
+        startWakeListening();
+    }
+
+    // Preprocesado simple de puntuación para TTS
     private String prepTts(String text) {
         if (text == null) return "";
         String s = text.trim();

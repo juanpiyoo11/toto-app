@@ -25,13 +25,13 @@ android {
     buildTypes {
         debug {
             // ¡Debe terminar en "/"!
-            buildConfigField "String", "BACKEND_BASE_URL", "\"http://192.168.1.9:8080/\""
+            buildConfigField "String", "BACKEND_BASE_URL", "\"https://toto-backend-production.up.railway.app/\""
         }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // Cambiá por tu URL real de prod. ¡Debe terminar en "/"!
-            buildConfigField "String", "BACKEND_BASE_URL", "\"https://tu-backend.prod/\""
+            buildConfigField "String", "BACKEND_BASE_URL", "\"https://toto-backend-production.up.railway.app/\""
         }
     }
 

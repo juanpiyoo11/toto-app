@@ -1307,6 +1307,7 @@ public class InstructionService extends Service {
         if (s == null) return "";
         String out = s;
 
+        // Limpieza básica de markdown / código / links / títulos / citas
         out = out.replaceAll("(?s)```.*?```", " ");
         out = out.replace("`", "");
         out = out.replaceAll("!\\[(.*?)\\]\\((.*?)\\)", "$1");
@@ -1314,22 +1315,38 @@ public class InstructionService extends Service {
         out = out.replaceAll("(?m)^\\s{0,3}#{1,6}\\s*", "");
         out = out.replaceAll("(?m)^\\s*>\\s?", "");
 
+        // --- NUEVO: quitar énfasis con asteriscos manteniendo el texto ---
+        out = out.replaceAll("\\*\\*\\*(.+?)\\*\\*\\*", "$1");  // ***negrita+cursiva***
+        out = out.replaceAll("\\*\\*(.+?)\\*\\*", "$1");        // **negrita**
+        out = out.replaceAll("\\*(.+?)\\*", "$1");              // *cursiva*
+        // -----------------------------------------------------------------
+
+        // Listas / numeraciones → pausas más naturales
         out = out.replaceAll("(?m)^\\s*([-*+]|•)\\s+", "— ");
         out = out.replaceAll("(?m)^\\s*(\\d+)[\\.)]\\s+", "$1: ");
         out = out.replace(" - ", ", ");
         out = out.replaceAll("\\((.*?)\\)", ", $1, ");
         out = out.replace(":", ", ");
 
+        // Saltos de línea → pausa larga
         out = out.replaceAll("\\r?\\n\\s*\\r?\\n", " … ");
         out = out.replaceAll("\\r?\\n", " … ");
 
+        // --- NUEVO: si quedaron asteriscos sueltos, eliminarlos ---
+        out = out.replace("*", "");
+        // ----------------------------------------------------------
+
+        // Normalización de espacios
         out = out.replaceAll("\\s{2,}", " ").trim();
 
+        // Signos españoles de apertura si hace falta
         out = ensureSpanishOpeners(out);
 
+        // Puntuación final para una buena cadencia
         if (!out.matches(".*[\\.!?…]$")) out = out + ".";
         return out;
     }
+
 
     private static String ensureSpanishOpeners(String text) {
         String[] parts = text.split("(?<=[\\.\\!\\?…])\\s+");

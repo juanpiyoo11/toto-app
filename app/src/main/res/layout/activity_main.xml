@@ -20,4 +20,28 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Caída (demo)" />
+
+
+    <Button
+        android:id="@+id/btnResumeListening"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Reanudar escucha"
+        android:layout_marginTop="8dp" />
+
+    <Button
+        android:id="@+id/btnPauseListening"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pausar escucha"
+        android:layout_marginTop="12dp" />
+
+
+    <Button
+        android:id="@+id/btnStopTts"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Cortar voz (TTS)"
+        android:layout_marginTop="12dp"/>
+
 </LinearLayout>
