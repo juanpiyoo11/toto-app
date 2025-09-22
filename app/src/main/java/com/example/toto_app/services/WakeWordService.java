@@ -38,6 +38,8 @@ import java.io.IOException;
 import java.util.Locale;
 import java.util.Random;
 
+import com.example.toto_app.util.TtsSanitizer;
+
 public class WakeWordService extends Service implements RecognitionListener {
 
     public static final String ACTION_CMD_FINISHED  = "com.example.toto_app.ACTION_CMD_FINISHED";
@@ -83,7 +85,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     // Estado de pausa de escucha
     private volatile boolean listeningPaused = false;
 
-    // NUEVO: “tipo” de lo que se está diciendo ahora ("ACK" o "SAY")
+    // “tipo” de lo que se está diciendo ahora ("ACK" o "SAY")
     @Nullable private String currentUtteranceKind = null;
 
     private static final String[] ACK_TEMPLATES = new String[] {
@@ -196,30 +198,7 @@ public class WakeWordService extends Service implements RecognitionListener {
                     }
                     @Override public void onDone(String utteranceId) {
                         new android.os.Handler(getMainLooper()).post(() -> {
-                            String kind = currentUtteranceKind;
-                            // Reset locales de TTS
-                            currentUtteranceKind = null;
-                            isSpeaking = false;
-                            abandonAudioFocus();
-
-                            if ("ACK".equals(kind)) {
-                                startInstructionService();
-                            } else { // SAY o null
-                                if (pendingAfterSay != null) {
-                                    try { startService(pendingAfterSay); } catch (Exception ignored) {}
-                                    pendingAfterSay = null;
-                                } else {
-                                    triggered = false;
-                                    lastDetectionText = "";
-                                    lastDetectionAt = 0L;
-                                    if (!listeningPaused) {
-                                        startWakeListening();
-                                    } else {
-                                        Log.d(TAG, "Fin TTS: en pausa → no rearmo");
-                                        updateForegroundNotification("Pausa: no estoy escuchando");
-                                    }
-                                }
-                            }
+                            finishAfterTts(/*kind=*/currentUtteranceKind);
                         });
                     }
                     @Override public void onError(String utteranceId) { onDone(utteranceId); }
@@ -435,7 +414,7 @@ public class WakeWordService extends Service implements RecognitionListener {
         if (ttsReady && tts != null) {
             String template = ACK_TEMPLATES[rng.nextInt(ACK_TEMPLATES.length)];
             String text = String.format(Locale.getDefault(), template, userName);
-            String s = prepTts(text);
+            String s = TtsSanitizer.sanitizeForTTS(text);
 
             Bundle params = new Bundle();
             String utteranceId = "toto_ack_" + System.currentTimeMillis();
@@ -474,7 +453,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void speakText(String text) {
         stopListening();
         if (ttsReady && tts != null) {
-            String s = prepTts(text);
+            String s = TtsSanitizer.sanitizeForTTS(text);
             Bundle params = new Bundle();
             String utteranceId = "toto_say_" + System.currentTimeMillis();
             isSpeaking = true;
@@ -485,36 +464,42 @@ public class WakeWordService extends Service implements RecognitionListener {
         }
     }
 
-    // NUEVO: cortar TTS actual sin alterar el “estado” lógico
+    // NUEVO: cortar TTS actual y unificar flujo post-TTS
     private void stopSpeaking() {
         if (tts == null || !isSpeaking) {
             Log.d(TAG, "stopSpeaking: no hay TTS en curso");
             return;
         }
-        String kind = currentUtteranceKind; // snapshot
         try { tts.stop(); } catch (Exception ignored) {}
+        finishAfterTts(/*kind=*/currentUtteranceKind);
+    }
+
+    /** Unifica el flujo de finalización de TTS para onDone() y stopSpeaking(). */
+    private void finishAfterTts(@Nullable String kindSnapshot) {
+        // reset estado TTS
         currentUtteranceKind = null;
         isSpeaking = false;
         abandonAudioFocus();
 
-        if ("ACK".equals(kind)) {
-            // Continuamos el flujo normal post-ACK: pasar a InstructionService
+        if ("ACK".equals(kindSnapshot)) {
+            // Continuación natural: pasar a InstructionService
             startInstructionService();
+            return;
+        }
+        // Post-respuesta SAY / null
+        if (pendingAfterSay != null) {
+            try { startService(pendingAfterSay); } catch (Exception ignored) {}
+            pendingAfterSay = null;
+            return;
+        }
+        triggered = false;
+        lastDetectionText = "";
+        lastDetectionAt = 0L;
+        if (!listeningPaused) {
+            startWakeListening();
         } else {
-            // Flujo post-respuesta
-            if (pendingAfterSay != null) {
-                try { startService(pendingAfterSay); } catch (Exception ignored) {}
-                pendingAfterSay = null;
-            } else {
-                triggered = false;
-                lastDetectionText = "";
-                lastDetectionAt = 0L;
-                if (!listeningPaused) {
-                    startWakeListening();
-                } else {
-                    updateForegroundNotification("Pausa: no estoy escuchando");
-                }
-            }
+            Log.d(TAG, "Fin TTS: en pausa → no rearmo");
+            updateForegroundNotification("Pausa: no estoy escuchando");
         }
     }
 
@@ -530,16 +515,5 @@ public class WakeWordService extends Service implements RecognitionListener {
         listeningPaused = false;
         Log.d(TAG, "Wake reanudado por acción de usuario");
         startWakeListening();
-    }
-
-    // Preprocesado simple de puntuación para TTS
-    private String prepTts(String text) {
-        if (text == null) return "";
-        String s = text.trim();
-        s = s.replaceAll("\\s+", " ");
-        s = s.replaceAll("\\s+,", ",");
-        s = s.replaceAll("\\s+\\.", ".");
-        if (!s.matches(".*[.!?¡¿…]$")) s = s + ".";
-        return s;
     }
 }

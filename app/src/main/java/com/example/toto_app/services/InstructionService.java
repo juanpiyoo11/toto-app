@@ -1,66 +1,42 @@
 // InstructionService.java
 package com.example.toto_app.services;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.app.Service;
-import android.app.role.RoleManager;
-import android.app.KeyguardManager;
-import android.app.ActivityManager;
 import android.content.Intent;
-import android.content.pm.ServiceInfo;
-import android.net.Uri;
-import android.os.Build;
-import android.os.Bundle;
 import android.os.IBinder;
 import android.os.SystemClock;
-import android.telecom.TelecomManager;
 import android.util.Log;
 
-import com.example.toto_app.network.WhatsAppSendRequest;
-import com.example.toto_app.network.WhatsAppSendResponse;
-
 import androidx.annotation.Nullable;
-import androidx.core.app.NotificationCompat;
 
 import com.example.toto_app.actions.DeviceActions;
 import com.example.toto_app.audio.InstructionCapture;
-import com.example.toto_app.network.APIService;
+import com.example.toto_app.audio.VadUtils;
+import com.example.toto_app.calls.AppState;
+import com.example.toto_app.calls.CallUi;
+import com.example.toto_app.calls.PhoneCallExecutor;
+import com.example.toto_app.network.AskRequest;
+import com.example.toto_app.network.AskResponse;
+import com.example.toto_app.network.NluRouteResponse;
 import com.example.toto_app.network.RetrofitClient;
-import com.example.toto_app.network.TranscriptionResponse;
-import com.example.toto_app.nlp.InstructionRouter;
-import com.example.toto_app.nlp.QuickTimeParser;
+import com.example.toto_app.nlp.NluResolver;
+import com.example.toto_app.stt.SttClient;
+import com.example.toto_app.util.TtsSanitizer;
+import com.example.toto_app.falls.FallLogic;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.text.Normalizer;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.Executors;
-import java.util.List;
 
-import okhttp3.MediaType;
-import okhttp3.MultipartBody;
-import okhttp3.RequestBody;
-import retrofit2.Call;
 import retrofit2.Response;
 
-public class InstructionService extends Service {
+public class InstructionService extends android.app.Service {
 
     private static final String TAG = "InstructionService";
-    private static final String CALL_CHANNEL_ID = "toto_call_confirm";
-    private static final int CALL_NOTIFY_ID_BASE = 223400;
-
-    private static final String TEMP_FG_CHANNEL_ID = "toto_temp_fg";
-    private static final int TEMP_FG_NOTIFY_ID = 998711;
 
     private String userName = "Juan";
 
@@ -71,35 +47,12 @@ public class InstructionService extends Service {
     private int fallRetry = 0;
     // ===================================
 
-    // ===== Contacto de emergencia (por ahora hardcodeado) =====
+    // ===== Contacto de emergencia (igual que antes) =====
     private static final String EMERGENCY_NAME   = "Tamara";
     private static final String EMERGENCY_NUMBER = "+5491159753115";
-    private static String buildEmergencyText(String userName) {
-        String u = (userName == null || userName.isBlank()) ? "la persona" : userName;
-        return "⚠️ Alerta: " + u + " puede haberse caído o pidió ayuda. "
-                + "Este aviso fue enviado automáticamente por Toto para que puedan comunicarse";
-    }
-    private boolean sendEmergencyMessageToEmergencyContact() {
-        try {
-            String to = EMERGENCY_NUMBER.replaceAll("[^0-9+]", "");
-            String msg = buildEmergencyText(userName);
-            WhatsAppSendRequest wreq = new WhatsAppSendRequest(to, msg, Boolean.FALSE);
-            retrofit2.Response<WhatsAppSendResponse> wresp = RetrofitClient.api().waSend(wreq).execute();
-            WhatsAppSendResponse wbody = wresp.body();
-            return wresp.isSuccessful()
-                    && wbody != null
-                    && ("ok".equalsIgnoreCase(wbody.status)
-                    || "ok_template".equalsIgnoreCase(wbody.status)
-                    || (wbody.id != null && !wbody.id.trim().isEmpty()));
-        } catch (Exception ex) {
-            android.util.Log.e(TAG, "Error enviando WhatsApp a emergencia", ex);
-            return false;
-        }
-    }
-    // ===========================================================
+    // ====================================================
 
-    @Override
-    public void onCreate() { super.onCreate(); }
+    @Override public void onCreate() { super.onCreate(); }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -111,7 +64,6 @@ public class InstructionService extends Service {
             if (intent.hasExtra(EXTRA_FALL_MODE)) {
                 String fmRaw = intent.getStringExtra(EXTRA_FALL_MODE);
                 if (fmRaw != null && !fmRaw.trim().isEmpty()) {
-                    // [FALL-RETRY] parseo "AWAIT:1" → fallMode="AWAIT", fallRetry=1
                     String upper = fmRaw.trim().toUpperCase(Locale.ROOT);
                     String[] parts = upper.split(":", 2);
                     fallMode = parts[0];
@@ -160,16 +112,15 @@ public class InstructionService extends Service {
                         ? 220   // respuestas cortas
                         : 320;  // comandos normales
 
-        if (!hasEnoughVoice(wav, cfg.silenceDbfs, minVoicedMs)) {
+        if (!VadUtils.hasEnoughVoice(wav, cfg.silenceDbfs, minVoicedMs)) {
             Log.d(TAG, "VAD: silencio o voz insuficiente");
-            // [FALL-RETRY] AWAIT: si no hubo respuesta → repregunta una vez; si ya repreguntó → avisa.
             if ("AWAIT".equals(fallMode)) {
                 if (fallRetry <= 0) {
                     Log.d(TAG, "[FALL-RETRY] AWAIT sin respuesta → repregunto (retry=1)");
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
                     Log.d(TAG, "[FALL-RETRY] AWAIT sin respuesta por segunda vez → envío a contacto de emergencia");
-                    boolean ok = sendEmergencyMessageToEmergencyContact();
+                    boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
                     if (ok) {
                         sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
                     } else {
@@ -190,36 +141,22 @@ public class InstructionService extends Service {
 
         String transcript = "";
         try {
-            APIService api = RetrofitClient.api();
-            RequestBody fileBody = RequestBody.create(wav, MediaType.parse("audio/wav"));
-            MultipartBody.Part audioPart = MultipartBody.Part.createFormData("audio", wav.getName(), fileBody);
-            Call<TranscriptionResponse> call = api.transcribe(audioPart, null, null);
-            Response<TranscriptionResponse> resp = call.execute();
-
-            if (resp.isSuccessful() && resp.body() != null) {
-                transcript = resp.body().text != null ? resp.body().text.trim() : "";
-                Log.d(TAG, "INSTRUCCIÓN (backend STT): " + transcript);
-            } else {
-                Log.e(TAG, "Transcribe error HTTP: " + (resp != null ? resp.code(): -1));
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error llamando al backend STT", e);
+            transcript = SttClient.transcribe(wav);
         } finally {
             try { wav.delete(); } catch (Exception ignored) {}
         }
 
         // ── Fase AWAIT: decidir acción ──
         if ("AWAIT".equals(fallMode)) {
-            String norm = normEs(transcript);
+            String norm = FallLogic.normEs(transcript);
 
-            // [FALL-RETRY] Nada reconocido → repregunta la primera vez; segunda vez envía
             if (norm.isEmpty()) {
                 if (fallRetry <= 0) {
                     Log.d(TAG, "[FALL-RETRY] AWAIT transcripción vacía → repregunto (retry=1)");
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
                     Log.d(TAG, "[FALL-RETRY] AWAIT transcripción vacía (2da) → envío a contacto de emergencia");
-                    boolean ok = sendEmergencyMessageToEmergencyContact();
+                    boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
                     if (ok) {
                         sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
                     } else {
@@ -230,11 +167,10 @@ public class InstructionService extends Service {
                 return;
             }
 
-            // Nueva resolución explícita
-            FallReply fr = assessFallReply(norm);
+            FallLogic.FallReply fr = FallLogic.assessFallReply(norm);
             switch (fr) {
                 case HELP: {
-                    boolean ok = sendEmergencyMessageToEmergencyContact();
+                    boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
                     if (ok) {
                         sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 8000);
                     } else {
@@ -250,7 +186,6 @@ public class InstructionService extends Service {
                 }
                 case UNKNOWN:
                 default: {
-                    // Ambiguo → repregunta corta, mantiene el mismo retry (no cuenta como “sin respuesta”)
                     sayThenListenHere("No me quedó claro. ¿Estás bien?", "AWAIT:" + fallRetry);
                     stopSelf();
                     return;
@@ -266,8 +201,8 @@ public class InstructionService extends Service {
         }
 
         // === FALL TRIGGER GLOBAL ===
-        String normAll = normEs(transcript);
-        if (saysHelp(normAll) || mentionsFall(normAll)) {
+        String normAll = FallLogic.normEs(transcript);
+        if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
             Log.d(TAG, "Fall trigger (global): ayuda/caída detectada → preguntar primero");
             sayThenListenHere("¿Estás bien?", "AWAIT:0");
             stopSelf();
@@ -308,56 +243,11 @@ public class InstructionService extends Service {
             }
         } catch (Throwable ignored) {}
 
-        // ==== Alarmas locales ====
-        boolean wantsAlarm = looksLikeAlarmRequest(transcript);
-        Log.d(TAG, "Alarm gate=" + wantsAlarm);
-        if (wantsAlarm) {
-            QuickTimeParser.Relative rel = QuickTimeParser.parseRelativeEsAr(transcript);
-            if (rel != null && rel.minutesTotal > 0) {
-                Calendar target = Calendar.getInstance();
-                target.add(Calendar.MINUTE, rel.minutesTotal);
-                int hh = target.get(Calendar.HOUR_OF_DAY);
-                int mm = target.get(Calendar.MINUTE);
-                DeviceActions.AlarmResult res = DeviceActions.setAlarm(this, hh, mm, "Toto");
-                handleAlarmResult(res, DeviceActions.hhmm(hh, mm));
-                stopSelf();
-                return;
-            }
-
-            QuickTimeParser.Absolute abs = QuickTimeParser.parseAbsoluteEsAr(transcript);
-            if (abs != null) {
-                Calendar now = Calendar.getInstance();
-                Calendar target = Calendar.getInstance();
-                target.set(Calendar.HOUR_OF_DAY, abs.hour24);
-                target.set(Calendar.MINUTE, abs.minute);
-                target.set(Calendar.SECOND, 0);
-                target.set(Calendar.MILLISECOND, 0);
-                if (target.before(now)) target.add(Calendar.DATE, 1);
-                int hh = target.get(Calendar.HOUR_OF_DAY);
-                int mm = target.get(Calendar.MINUTE);
-                DeviceActions.AlarmResult res = DeviceActions.setAlarm(this, hh, mm, "Toto");
-                handleAlarmResult(res, DeviceActions.hhmm(hh, mm));
-                stopSelf();
-                return;
-            }
-        }
-        // ==== Fin alarmas ====
 
         // 3) NLU remoto con fallback local
-        String intentName = null;
-        com.example.toto_app.network.NluRouteResponse nres = null;
-        try {
-            com.example.toto_app.network.NluRouteRequest nreq = new com.example.toto_app.network.NluRouteRequest();
-            nreq.text = transcript;
-            nreq.locale = "es-AR";
-            nreq.context = null;
-            nreq.hints = null;
-            retrofit2.Response<com.example.toto_app.network.NluRouteResponse> rNlu =
-                    RetrofitClient.api().nluRoute(nreq).execute();
-            if (rNlu.isSuccessful()) nres = rNlu.body();
-        } catch (Exception e) {
-            Log.e(TAG, "Error llamando /api/nlu/route", e);
-        }
+        NluRouteResponse nres = NluResolver.resolveWithFallback(transcript);
+        String intentName = (nres != null && nres.intent != null)
+                ? nres.intent.trim().toUpperCase(java.util.Locale.ROOT) : "UNKNOWN";
 
         if (nres != null) {
             Log.d(TAG, "NLU/route → intent=" + safe(nres.intent)
@@ -369,51 +259,12 @@ public class InstructionService extends Service {
             Log.d(TAG, "NLU/route → nres=null");
         }
 
-        if (nres != null && nres.intent != null && !nres.intent.trim().isEmpty()) {
-            intentName = nres.intent.trim().toUpperCase(java.util.Locale.ROOT);
-        } else {
-            InstructionRouter.Result fb0 = InstructionRouter.route(transcript);
-            intentName = mapLegacyActionToIntent(fb0.action);
-            if (nres == null) nres = new com.example.toto_app.network.NluRouteResponse();
-            if ("SET_ALARM".equals(intentName)) {
-                if (nres.slots == null) nres.slots = new com.example.toto_app.network.NluRouteResponse.Slots();
-                if (nres.slots.hour == null)   nres.slots.hour   = fb0.hour;
-                if (nres.slots.minute == null) nres.slots.minute = fb0.minute;
-            }
-            if ("CALL".equals(intentName)) {
-                if (nres.slots == null) nres.slots = new com.example.toto_app.network.NluRouteResponse.Slots();
-                if (nres.slots.contact_query == null) nres.slots.contact_query = fb0.contactName;
-            }
-        }
-
-        InstructionRouter.Result fb = InstructionRouter.route(transcript);
-        String fbIntent = mapLegacyActionToIntent(fb.action);
-        if (intentName == null || "ANSWER".equals(intentName) || "UNKNOWN".equals(intentName)) {
-            if ("QUERY_TIME".equals(fbIntent) || "QUERY_DATE".equals(fbIntent)
-                    || "CALL".equals(fbIntent) || "SET_ALARM".equals(fbIntent)) {
-                intentName = fbIntent;
-                if (nres == null) nres = new com.example.toto_app.network.NluRouteResponse();
-                if (nres.slots == null) nres.slots = new com.example.toto_app.network.NluRouteResponse.Slots();
-                if ("SET_ALARM".equals(intentName)) {
-                    if (nres.slots.hour == null)   nres.slots.hour   = fb.hour;
-                    if (nres.slots.minute == null) nres.slots.minute = fb.minute;
-                } else if ("CALL".equals(intentName)) {
-                    if (nres.slots.contact_query == null) nres.slots.contact_query = fb.contactName;
-                }
-            }
-        }
-
-        Log.d(TAG, "Intent final → " + (intentName == null ? "null" : intentName)
-                + " (fbIntent=" + fbIntent + ")");
-
-        if (intentName == null || intentName.trim().isEmpty()) intentName = "UNKNOWN";
-
         if (nres != null && nres.ack_tts != null && !nres.ack_tts.trim().isEmpty()) {
             boolean isAnswerish = "ANSWER".equals(intentName) || "UNKNOWN".equals(intentName);
             if (!"QUERY_TIME".equals(intentName) && !"QUERY_DATE".equals(intentName)
                     && !isAnswerish && !"CALL".equals(intentName)
                     && !"SEND_MESSAGE".equals(intentName)) {
-                sayViaWakeService(sanitizeForTTS(nres.ack_tts), 6000);
+                sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 6000);
             }
         }
 
@@ -427,7 +278,7 @@ public class InstructionService extends Service {
                             "SEND_MESSAGE".equals(intentName);
 
             if (actionable) {
-                sayViaWakeService(sanitizeForTTS(nres.clarifying_question.trim()), 8000);
+                sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()), 8000);
                 stopSelf();
                 return;
             }
@@ -505,24 +356,32 @@ public class InstructionService extends Service {
                 }
 
                 if (rc == null || rc.number == null || rc.number.isEmpty()) {
-                    showCallNotification(who, null);
+                    CallUi.showCallNotification(this, who, null,
+                            androidx.core.content.ContextCompat.checkSelfPermission(
+                                    this, android.Manifest.permission.CALL_PHONE)
+                                    == android.content.pm.PackageManager.PERMISSION_GRANTED);
                     sayViaWakeService("No encontré a " + who + " en tus contactos. Te dejé una notificación para marcar.", 12000);
                     postWatchdog(8000);
                     stopSelf();
                     return;
                 }
 
-                // === NUEVO: si la app NO está en primer plano, comportarse como bloqueado → notificación para tocar ===
-                if (!isAppInForeground()) {
-                    showCallNotification(rc.name, rc.number);
+                // Si la app NO está foreground o el dispositivo está bloqueado → notificación tocable
+                if (!AppState.isAppInForeground(this)) {
+                    CallUi.showCallNotification(this, rc.name, rc.number,
+                            androidx.core.content.ContextCompat.checkSelfPermission(
+                                    this, android.Manifest.permission.CALL_PHONE)
+                                    == android.content.pm.PackageManager.PERMISSION_GRANTED);
                     sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 10000);
                     postWatchdog(8000);
                     stopSelf();
                     return;
                 }
-
-                if (isDeviceLocked()) {
-                    showCallNotification(rc.name, rc.number);
+                if (AppState.isDeviceLocked(this)) {
+                    CallUi.showCallNotification(this, rc.name, rc.number,
+                            androidx.core.content.ContextCompat.checkSelfPermission(
+                                    this, android.Manifest.permission.CALL_PHONE)
+                                    == android.content.pm.PackageManager.PERMISSION_GRANTED);
                     sayViaWakeService("Desbloqueá y tocá la notificación para llamar a " + rc.name + ".", 12000);
                     postWatchdog(8000);
                     stopSelf();
@@ -533,20 +392,20 @@ public class InstructionService extends Service {
                         this, android.Manifest.permission.CALL_PHONE)
                         == android.content.pm.PackageManager.PERMISSION_GRANTED;
 
-                if (!hasCall && !isDefaultDialer()) {
-                    // en este escenario también preferimos notificación tocable
-                    showCallNotification(rc.name, rc.number);
+                if (!hasCall && !AppState.isDefaultDialer(this)) {
+                    CallUi.showCallNotification(this, rc.name, rc.number, hasCall);
                     sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 12000);
                     postWatchdog(8000);
                     stopSelf();
                     return;
                 }
 
-                boolean ok = placeDirectCall(rc.name, rc.number);
+                PhoneCallExecutor calls = new PhoneCallExecutor(this);
+                boolean ok = calls.placeDirectCall(rc.name, rc.number, AppState.isDefaultDialer(this));
                 if (ok) {
                     sayViaWakeService("Llamando a " + rc.name + ".", 4000);
                 } else {
-                    showCallNotification(rc.name, rc.number);
+                    CallUi.showCallNotification(this, rc.name, rc.number, hasCall);
                     sayViaWakeService("No pude iniciar la llamada directa. Te dejé una notificación para marcar.", 12000);
                 }
 
@@ -601,11 +460,12 @@ public class InstructionService extends Service {
 
                 String to = rc.number.replaceAll("[^0-9+]", "");
                 try {
-                    WhatsAppSendRequest wreq = new WhatsAppSendRequest(to, msg.trim(), Boolean.FALSE);
-                    retrofit2.Response<WhatsAppSendResponse> wresp =
+                    com.example.toto_app.network.WhatsAppSendRequest wreq =
+                            new com.example.toto_app.network.WhatsAppSendRequest(to, msg.trim(), Boolean.FALSE);
+                    retrofit2.Response<com.example.toto_app.network.WhatsAppSendResponse> wresp =
                             RetrofitClient.api().waSend(wreq).execute();
 
-                    WhatsAppSendResponse wbody = wresp.body();
+                    com.example.toto_app.network.WhatsAppSendResponse wbody = wresp.body();
                     boolean ok =
                             wresp.isSuccessful()
                                     && wbody != null
@@ -632,7 +492,7 @@ public class InstructionService extends Service {
                         }
                     }
                 } catch (Exception ex) {
-                    android.util.Log.e(TAG, "Error /api/whatsapp/send", ex);
+                    Log.e(TAG, "Error /api/whatsapp/send", ex);
                     sayViaWakeService("Tuve un problema mandando el mensaje.", 8000);
                 }
 
@@ -649,14 +509,13 @@ public class InstructionService extends Service {
             case "UNKNOWN":
             default: {
                 try {
-                    com.example.toto_app.network.AskRequest rq = new com.example.toto_app.network.AskRequest();
+                    AskRequest rq = new AskRequest();
                     rq.prompt = transcript;
-                    retrofit2.Response<com.example.toto_app.network.AskResponse> r2 =
-                            RetrofitClient.api().ask(rq).execute();
+                    Response<AskResponse> r2 = RetrofitClient.api().ask(rq).execute();
                     String reply = (r2.isSuccessful() && r2.body() != null && r2.body().reply != null)
                             ? r2.body().reply.trim()
                             : "No estoy seguro, ¿podés repetir?";
-                    sayViaWakeService(sanitizeForTTS(reply), 12000);
+                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(reply), 12000);
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/ask", ex);
                     sayViaWakeService("Tuve un problema procesando eso.", 8000);
@@ -667,329 +526,18 @@ public class InstructionService extends Service {
         }
     }
 
-    // === NUEVO: detectar si la app está en primer plano ===
-    private boolean isAppInForeground() {
-        try {
-            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
-            if (am == null) return false;
-            List<ActivityManager.RunningAppProcessInfo> procs = am.getRunningAppProcesses();
-            if (procs == null) return false;
-            final String myPkg = getPackageName();
-            for (ActivityManager.RunningAppProcessInfo p : procs) {
-                if (p == null || p.pkgList == null) continue;
-                boolean isMine = false;
-                for (String pkg : p.pkgList) {
-                    if (myPkg.equals(pkg)) { isMine = true; break; }
-                }
-                if (!isMine) continue;
-                int imp = p.importance;
-                if (imp == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
-                        || imp == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
-                    return true;
-                }
-            }
-        } catch (Throwable t) {
-            Log.w(TAG, "isAppInForeground() fallo, asumo background", t);
-        }
-        return false;
-    }
-
     // ==== Helpers de flujo de caída ====
-
     private void sayThenListenHere(String text, @Nullable String nextFallMode) {
         Intent say = new Intent(this, WakeWordService.class)
                 .setAction(WakeWordService.ACTION_SAY)
-                .putExtra("text", sanitizeForTTS(text))
+                .putExtra("text", TtsSanitizer.sanitizeForTTS(text))
                 .putExtra(WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true)
                 .putExtra(WakeWordService.EXTRA_AFTER_SAY_USER_NAME, userName);
         if (nextFallMode != null) {
-            // [FALL-RETRY] Pasamos "AWAIT:0" o "AWAIT:1" en el MISMO extra que ya reinyecta WakeWordService
             say.putExtra(WakeWordService.EXTRA_AFTER_SAY_FALL_MODE, nextFallMode);
         }
         androidx.core.content.ContextCompat.startForegroundService(this, say);
     }
-
-    private static String normEs(String raw) {
-        if (raw == null) return "";
-        String s = java.text.Normalizer.normalize(raw, java.text.Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "")
-                .toLowerCase(java.util.Locale.ROOT);
-
-        s = s.replaceAll("([.,])", " $1 ");
-        s = s.replaceAll("[¿?¡!;:()\\[\\]\"]", " ");
-        s = s.replaceAll("\\s+", " ").trim();
-        return " " + s + " ";
-    }
-
-    private enum FallReply { OK, HELP, UNKNOWN }
-
-    private static boolean hasStandaloneNo(String norm) {
-        return norm.matches(".*\\bno\\b.*")
-                && !norm.contains(" no fue nada ")
-                && !norm.contains(" no te preocupes ")
-                && !norm.contains(" no hay problema ")
-                && !norm.contains(" no gracias ")
-                && !saysOk(norm); // solo cuenta si NO hay señales de OK
-    }
-
-    private static FallReply assessFallReply(String norm) {
-        if (saysHelp(norm)) return FallReply.HELP;
-        if (saysOk(norm))   return FallReply.OK;
-        if (mentionsFall(norm)) return FallReply.HELP;
-        if (hasStandaloneNo(norm)) return FallReply.HELP;
-        return FallReply.UNKNOWN;
-    }
-
-    private static boolean saysOk(String norm) {
-        if (norm.contains(" no me puedo mover ")
-                || norm.contains(" no puedo levantarme ") || norm.contains(" no puedo pararme ")
-                || norm.contains(" estoy mal ")
-                || norm.contains(" me duele ")
-                || norm.contains(" me lastime ") || norm.contains(" me lastimé ")) {
-            return false;
-        }
-        if (norm.matches(".*\\bno\\s+estoy\\s+bien\\b.*")) return false;
-        if (norm.matches(".*\\bno\\s+esta\\s+bien\\b.*")) return false;
-        if (norm.contains(" estoy bien ")
-                || norm.contains(" esta bien ")
-                || norm.contains(" esta todo bien ")
-                || norm.contains(" todo bien ")
-                || norm.contains(" todo ok ")
-                || norm.contains(" estoy ok ")
-                || norm.contains(" tranquilo ") || norm.contains(" tranquila ")
-                || norm.contains(" ya estoy bien ")
-                || norm.contains(" no fue nada ")
-                || norm.contains(" no te preocupes ")
-                || norm.contains(" no hay problema ")
-                || norm.contains(" no estoy mal ")
-                || norm.contains(" no me paso nada ") || norm.contains(" no me pasó nada ")
-                || norm.matches(".*\\b(si|sí)\\b.*")) {
-            return true;
-        }
-        return false;
-    }
-
-    private static boolean saysHelp(String norm) {
-        return norm.contains(" no estoy bien ")
-                || norm.contains(" no esta bien ")
-                || norm.contains(" estoy mal ")
-                || norm.contains(" me duele ")
-                || norm.contains(" me lastime ") || norm.contains(" me lastimé ")
-                || norm.contains(" no me puedo mover ")
-                || norm.contains(" no puedo levantarme ") || norm.contains(" no puedo pararme ")
-                || norm.contains(" ayuda ") || norm.contains(" ayudame ") || norm.contains(" ayúdame ")
-                || norm.contains(" auxilio ") || norm.contains(" emergencia ") || norm.contains(" ambulancia ")
-                || norm.contains(" doctor ") || norm.contains(" medico ") || norm.contains(" médico ");
-    }
-
-    private static boolean mentionsFall(String norm) {
-        return norm.contains(" me cai ") || norm.contains(" me caí ")
-                || norm.contains(" me caigo ") || norm.contains(" me estoy cayendo ")
-                || norm.contains(" caida ") || norm.contains(" caída ")
-                || norm.contains(" me tropece ") || norm.contains(" me tropecé ")
-                || norm.contains(" me pegue ") || norm.contains(" me pegué ")
-                || norm.contains(" me desmaye ") || norm.contains(" me desmayé ");
-    }
-
-    // --- VAD / WAV helpers (sin cambios) ---
-    private static class WavInfo {
-        int sampleRate;
-        int channels;
-        int bitsPerSample;
-        long dataOffset;
-        long dataSize;
-    }
-
-    private static boolean hasEnoughVoice(File wavFile, double cfgGateDbfs, int minVoicedMs) {
-        try (FileInputStream in = new FileInputStream(wavFile)) {
-            WavInfo wi = parseWav(in);
-            if (wi == null || wi.bitsPerSample <= 0 || wi.channels <= 0 || wi.sampleRate <= 0) {
-                Log.w(TAG, "VAD: formato WAV no reconocido → no bloqueo STT");
-                return true;
-            }
-            in.getChannel().position(wi.dataOffset);
-
-            final int FRAME_MS = 10;
-            final int samplesPerFramePerCh = wi.sampleRate * FRAME_MS / 1000;
-            final int bytesPerSample = Math.max(1, wi.bitsPerSample / 8);
-            final int frameBytes = samplesPerFramePerCh * wi.channels * bytesPerSample;
-
-            byte[] buf = new byte[frameBytes];
-            int read;
-
-            final int CAL_FRAMES = Math.min(30, (int)(wi.dataSize / frameBytes));
-            double[] firstDb = new double[Math.max(1, CAL_FRAMES)];
-            int idx = 0;
-
-            while (idx < CAL_FRAMES && (read = in.read(buf)) == frameBytes) {
-                firstDb[idx++] = frameDbfs(buf, wi.channels, bytesPerSample);
-            }
-            if (idx == 0) {
-                Log.d(TAG, "VAD: archivo sin frames de audio");
-                return false;
-            }
-            double[] slice = Arrays.copyOf(firstDb, idx);
-            Arrays.sort(slice);
-            double noiseDbfs = slice[(int)Math.floor(slice.length * 0.7)];
-
-            double thr = Math.min(noiseDbfs + 6.0, cfgGateDbfs + 2.0);
-            thr = Math.max(thr, -65.0);
-            thr = Math.min(thr, -38.0);
-
-            in.getChannel().position(wi.dataOffset);
-
-            int voicedMs = 0;
-            int continuousMs = 0;
-            boolean peakDetected = false;
-
-            long framesSeen = 0;
-
-            while ((read = in.read(buf)) == frameBytes) {
-                framesSeen++;
-                double db = frameDbfs(buf, wi.channels, bytesPerSample);
-
-                if (!peakDetected && framePeak(buf, wi.channels, bytesPerSample) > 0.10) {
-                    peakDetected = true;
-                }
-
-                if (db > thr) {
-                    voicedMs += FRAME_MS;
-                    continuousMs += FRAME_MS;
-                } else {
-                    continuousMs = Math.max(0, continuousMs - FRAME_MS);
-                }
-
-                if (continuousMs >= 120) {
-                    Log.d(TAG, "VAD pass por racha continua >=120ms");
-                    break;
-                }
-            }
-
-            boolean pass = (voicedMs >= minVoicedMs) || (continuousMs >= 120) || peakDetected;
-            Log.d(TAG, String.format(Locale.US,
-                    "VAD dbg → wav[%d Hz, %d ch, %d bits], noise=%.1f dBFS, thr=%.1f dBFS, voiced=%dms, cont=%dms, peak=%s, frames=%d",
-                    wi.sampleRate, wi.channels, wi.bitsPerSample, noiseDbfs, thr, voicedMs, continuousMs,
-                    peakDetected ? "Y" : "N", framesSeen));
-
-            return pass;
-        } catch (Exception e) {
-            Log.w(TAG, "VAD error (" + e.getMessage() + ") → no bloqueo STT", e);
-            return true;
-        }
-    }
-
-    private static WavInfo parseWav(FileInputStream in) throws IOException {
-        byte[] hdr12 = new byte[12];
-        if (in.read(hdr12) != 12) return null;
-        if (!(hdr12[0]=='R' && hdr12[1]=='I' && hdr12[2]=='F' && hdr12[3]=='F'
-                && hdr12[8]=='W' && hdr12[9]=='A' && hdr12[10]=='V' && hdr12[11]=='E')) {
-            return null;
-        }
-        WavInfo wi = new WavInfo();
-        boolean haveFmt = false;
-        boolean haveData = false;
-
-        while (true) {
-            byte[] chdr = new byte[8];
-            int r = in.read(chdr);
-            if (r < 8) break;
-            String id = new String(chdr, 0, 4, java.nio.charset.StandardCharsets.US_ASCII);
-            int size = ((chdr[4] & 0xFF)) | ((chdr[5] & 0xFF) << 8) | ((chdr[6] & 0xFF) << 16) | ((chdr[7] & 0xFF) << 24);
-            if ("fmt ".equals(id)) {
-                byte[] fmt = new byte[size];
-                if (in.read(fmt) != size) return null;
-                int audioFormat   = (fmt[0] & 0xFF) | ((fmt[1] & 0xFF) << 8);
-                int channels      = (fmt[2] & 0xFF) | ((fmt[3] & 0xFF) << 8);
-                int sampleRate    = (fmt[4] & 0xFF) | ((fmt[5] & 0xFF) << 8) | ((fmt[6] & 0xFF) << 16) | ((fmt[7] & 0xFF) << 24);
-                int bitsPerSample = (fmt[14] & 0xFF) | ((fmt[15] & 0xFF) << 8);
-                wi.sampleRate = sampleRate;
-                wi.channels = Math.max(1, channels);
-                wi.bitsPerSample = Math.max(8, bitsPerSample);
-                haveFmt = (audioFormat == 1);
-            } else if ("data".equals(id)) {
-                wi.dataOffset = in.getChannel().position();
-                wi.dataSize = size;
-                haveData = true;
-                break;
-            } else {
-                long cur = in.getChannel().position();
-                in.getChannel().position(cur + size);
-            }
-        }
-
-        if (!haveFmt || !haveData) return null;
-        return wi;
-    }
-
-    private static double frameDbfs(byte[] buf, int channels, int bytesPerSample) {
-        int samples = buf.length / bytesPerSample;
-        int frames = samples / channels;
-        double sumSq = 0.0;
-        int count = 0;
-
-        for (int i = 0; i < frames; i++) {
-            double acc = 0.0;
-            for (int ch = 0; ch < channels; ch++) {
-                int index = (i * channels + ch) * bytesPerSample;
-                double v = sampleToFloat(buf, index, bytesPerSample);
-                acc += v;
-            }
-            double mono = acc / channels;
-            sumSq += mono * mono;
-            count++;
-        }
-        double rms = Math.sqrt(sumSq / Math.max(1, count)) + 1e-12;
-        return 20.0 * Math.log10(rms);
-    }
-
-    private static double framePeak(byte[] buf, int channels, int bytesPerSample) {
-        int samples = buf.length / bytesPerSample;
-        int frames = samples / channels;
-        double peak = 0.0;
-        for (int i = 0; i < frames; i++) {
-            double acc = 0.0;
-            for (int ch = 0; ch < channels; ch++) {
-                int index = (i * channels + ch) * bytesPerSample;
-                double v = sampleToFloat(buf, index, bytesPerSample);
-                acc += v;
-            }
-            double mono = Math.abs(acc / channels);
-            if (mono > peak) peak = mono;
-        }
-        return peak;
-    }
-
-    private static double sampleToFloat(byte[] buf, int index, int bytesPerSample) {
-        switch (bytesPerSample) {
-            case 1:
-                int u = buf[index] & 0xFF;
-                return ((u - 128) / 128.0);
-            case 2:
-                int lo = buf[index] & 0xFF;
-                int hi = buf[index + 1];
-                short s = (short)((hi << 8) | lo);
-                return s / 32768.0;
-            case 3: {
-                int b0 = buf[index] & 0xFF;
-                int b1 = buf[index + 1] & 0xFF;
-                int b2 = buf[index + 2];
-                int v = (b2 << 16) | (b1 << 8) | b0;
-                if ((v & 0x00800000) != 0) v |= 0xFF000000;
-                return v / 8388608.0;
-            }
-            case 4: {
-                int b0 = buf[index] & 0xFF;
-                int b1 = buf[index + 1] & 0xFF;
-                int b2 = buf[index + 2] & 0xFF;
-                int b3 = buf[index + 3];
-                int v = (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
-                return v / 2147483648.0;
-            }
-            default:
-                return 0.0;
-        }
-    }
-    // --- fin VAD / WAV helpers ---
 
     private void handleAlarmResult(DeviceActions.AlarmResult res, String when) {
         switch (res) {
@@ -1002,167 +550,6 @@ public class InstructionService extends Service {
             default:
                 sayViaWakeService("No pude crear la alarma. Fijate permisos del reloj.", 10000);
                 break;
-        }
-    }
-
-    private boolean isDefaultDialer() {
-        if (Build.VERSION.SDK_INT >= 29) {
-            try {
-                RoleManager rm = (RoleManager) getSystemService(ROLE_SERVICE);
-                return rm != null && rm.isRoleAvailable(RoleManager.ROLE_DIALER) && rm.isRoleHeld(RoleManager.ROLE_DIALER);
-            } catch (Throwable ignored) {}
-        }
-        try {
-            TelecomManager tm = (TelecomManager) getSystemService(TELECOM_SERVICE);
-            if (tm != null) {
-                String pkg = tm.getDefaultDialerPackage();
-                return getPackageName().equals(pkg);
-            }
-        } catch (Throwable ignored) {}
-        return false;
-    }
-
-    private boolean isDeviceLocked() {
-        KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
-        if (km == null) return false;
-        if (Build.VERSION.SDK_INT >= 23) {
-            return km.isDeviceLocked() || km.isKeyguardLocked();
-        } else {
-            return km.isKeyguardLocked();
-        }
-    }
-
-    private boolean placeDirectCall(String displayName, String number) {
-        boolean isDialer = isDefaultDialer();
-
-        if (isDialer) {
-            boolean startedFg = startTempForeground("Llamando a " + (displayName == null ? "" : displayName));
-            try {
-                TelecomManager tm = (TelecomManager) getSystemService(TELECOM_SERVICE);
-                if (tm == null) return false;
-                Uri uri = Uri.fromParts("tel", number, null);
-                Bundle extras = new Bundle();
-                tm.placeCall(uri, extras);
-                return true;
-            } catch (Throwable t) {
-                Log.e(TAG, "placeCall falló", t);
-                return false;
-            } finally {
-                stopTempForeground();
-            }
-        }
-
-        try {
-            Intent call = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
-            call.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            startActivity(call);
-            return true;
-        } catch (Throwable t) {
-            Log.e(TAG, "ACTION_CALL falló", t);
-            return false;
-        }
-    }
-
-    private boolean startTempForeground(String text) {
-        try {
-            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (nm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                NotificationChannel ch = new NotificationChannel(
-                        TEMP_FG_CHANNEL_ID, "Toto (tarea en curso)", NotificationManager.IMPORTANCE_LOW);
-                ch.setDescription("Uso temporal para ejecutar acciones");
-                nm.createNotificationChannel(ch);
-            }
-            NotificationCompat.Builder b = new NotificationCompat.Builder(this, TEMP_FG_CHANNEL_ID)
-                    .setSmallIcon(android.R.drawable.sym_action_call)
-                    .setContentTitle("Toto")
-                    .setContentText(text == null ? "Ejecutando acción…" : text)
-                    .setPriority(NotificationCompat.PRIORITY_LOW)
-                    .setOngoing(true);
-            Notification n = b.build();
-
-            startForeground(
-                    TEMP_FG_NOTIFY_ID,
-                    n,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-            );
-            return true;
-        } catch (IllegalArgumentException iae) {
-            Log.e(TAG, "FGS phoneCall no permitido por Manifest (falta android:foregroundServiceType=\"phoneCall\").", iae);
-            return false;
-        } catch (Throwable t) {
-            Log.e(TAG, "No se pudo iniciar FGS temporal", t);
-            return false;
-        }
-    }
-
-    private void stopTempForeground() {
-        try { stopForeground(STOP_FOREGROUND_DETACH); } catch (Throwable ignore) {}
-        try {
-            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (nm != null) nm.cancel(TEMP_FG_NOTIFY_ID);
-        } catch (Throwable ignore) {}
-    }
-
-    private void showCallNotification(String name, @Nullable String number) {
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (nm == null) return;
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            NotificationChannel ch = new NotificationChannel(
-                    CALL_CHANNEL_ID, "Llamar contacto", NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("Tocar para llamar");
-            nm.createNotificationChannel(ch);
-        }
-
-        final boolean hasCallPerm =
-                androidx.core.content.ContextCompat.checkSelfPermission(
-                        this, android.Manifest.permission.CALL_PHONE)
-                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
-
-        Intent tapIntent;
-        if (number != null && !number.isEmpty() && hasCallPerm) {
-            tapIntent = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
-        } else if (number != null && !number.isEmpty()) {
-            tapIntent = new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number)));
-        } else {
-            tapIntent = new Intent(Intent.ACTION_DIAL);
-        }
-        tapIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-
-        int reqCode = (int) (System.currentTimeMillis() & 0xFFFFFF);
-        PendingIntent contentPi = PendingIntent.getActivity(
-                this, reqCode, tapIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-        String who = (name != null && !name.isEmpty()) ? name : "Contacto";
-
-        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.sym_action_call)
-                .setContentTitle("Llamar a " + who)
-                .setContentText(number != null && !number.isEmpty() ? number : "Tocar para abrir el marcador")
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setCategory(NotificationCompat.CATEGORY_REMINDER)
-                .setAutoCancel(true)
-                .setOnlyAlertOnce(true)
-                .setContentIntent(contentPi);
-
-        int notifyId = CALL_NOTIFY_ID_BASE + (who.hashCode() & 0x0FFF);
-        nm.notify(notifyId, b.build());
-    }
-
-    private static String capitalizeFirst(String s, Locale loc) {
-        if (s == null || s.isEmpty()) return s;
-        return s.substring(0, 1).toUpperCase(loc) + s.substring(1);
-    }
-
-    private String mapLegacyActionToIntent(InstructionRouter.Action a) {
-        if (a == null) return "UNKNOWN";
-        switch (a) {
-            case QUERY_TIME: return "QUERY_TIME";
-            case QUERY_DATE: return "QUERY_DATE";
-            case SET_ALARM:  return "SET_ALARM";
-            case CALL:       return "CALL";
-            default:         return "UNKNOWN";
         }
     }
 
@@ -1211,6 +598,35 @@ public class InstructionService extends Service {
         return null;
     }
 
+    private static String capitalizeFirst(String s, Locale loc) {
+        if (s == null || s.isEmpty()) return s;
+        return s.substring(0, 1).toUpperCase(loc) + s.substring(1);
+    }
+
+    private static String safe(String s) { return (s == null) ? "null" : s; }
+
+    private static String slotsToString(NluRouteResponse.Slots s) {
+        if (s == null) return "{}";
+        return "{contact=" + safe(s.contact_query) +
+                ", hour=" + s.hour +
+                ", minute=" + s.minute +
+                ", dt=" + safe(s.datetime_iso) +
+                ", msg=" + safe(s.message_text) +
+                ", app=" + safe(s.app_name) + "}";
+    }
+
+    private static boolean looksLikePhoneNumber(String s) {
+        if (s == null) return false;
+        String t = s.replaceAll("[^0-9+]", "");
+        return t.length() >= 6;
+    }
+
+    private static String normalizeDialable(String s) {
+        if (s == null) return "";
+        return s.replaceAll("[^0-9+]", "");
+    }
+
+    // ===== Mensajería (fallback parser) =====
     private static final class FallbackMessage {
         final String who; final String text;
         FallbackMessage(String who, String text) { this.who = who; this.text = text; }
@@ -1271,102 +687,5 @@ public class InstructionService extends Service {
         s = s.replaceAll("\\s+", " ").trim();
         s = s.replaceAll("(\\s+por\\s+favor.*$)|(\\s+gracias.*$)", "").trim();
         return s;
-    }
-
-    // ===== Helpers =====
-    private static String safe(String s) { return (s == null) ? "null" : s; }
-
-    private static String slotsToString(com.example.toto_app.network.NluRouteResponse.Slots s) {
-        if (s == null) return "{}";
-        return "{contact=" + safe(s.contact_query) +
-                ", hour=" + s.hour +
-                ", minute=" + s.minute +
-                ", dt=" + safe(s.datetime_iso) +
-                ", msg=" + safe(s.message_text) +
-                ", app=" + safe(s.app_name) + "}";
-    }
-
-    private static boolean looksLikeAlarmRequest(String raw) {
-        if (raw == null) return false;
-        String s = Normalizer.normalize(raw, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "")
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("[¿?¡!.,;:()\\[\\]\"]", " ");
-        s = " " + s.replaceAll("\\s+", " ").trim() + " ";
-        return s.contains(" alarma ")
-                || s.contains(" despert")
-                || s.contains(" pone una alarma ")
-                || s.contains(" poneme una alarma ")
-                || s.contains(" pone alarma ")
-                || s.contains(" poneme alarma ")
-                || s.contains(" programa una alarma ")
-                || s.contains(" programame una alarma ");
-    }
-
-    private static String sanitizeForTTS(String s) {
-        if (s == null) return "";
-        String out = s;
-
-        // Limpieza básica de markdown / código / links / títulos / citas
-        out = out.replaceAll("(?s)```.*?```", " ");
-        out = out.replace("`", "");
-        out = out.replaceAll("!\\[(.*?)\\]\\((.*?)\\)", "$1");
-        out = out.replaceAll("\\[(.*?)\\]\\((.*?)\\)", "$1");
-        out = out.replaceAll("(?m)^\\s{0,3}#{1,6}\\s*", "");
-        out = out.replaceAll("(?m)^\\s*>\\s?", "");
-
-        // --- NUEVO: quitar énfasis con asteriscos manteniendo el texto ---
-        out = out.replaceAll("\\*\\*\\*(.+?)\\*\\*\\*", "$1");  // ***negrita+cursiva***
-        out = out.replaceAll("\\*\\*(.+?)\\*\\*", "$1");        // **negrita**
-        out = out.replaceAll("\\*(.+?)\\*", "$1");              // *cursiva*
-        // -----------------------------------------------------------------
-
-        // Listas / numeraciones → pausas más naturales
-        out = out.replaceAll("(?m)^\\s*([-*+]|•)\\s+", "— ");
-        out = out.replaceAll("(?m)^\\s*(\\d+)[\\.)]\\s+", "$1: ");
-        out = out.replace(" - ", ", ");
-        out = out.replaceAll("\\((.*?)\\)", ", $1, ");
-        out = out.replace(":", ", ");
-
-        // Saltos de línea → pausa larga
-        out = out.replaceAll("\\r?\\n\\s*\\r?\\n", " … ");
-        out = out.replaceAll("\\r?\\n", " … ");
-
-        // --- NUEVO: si quedaron asteriscos sueltos, eliminarlos ---
-        out = out.replace("*", "");
-        // ----------------------------------------------------------
-
-        // Normalización de espacios
-        out = out.replaceAll("\\s{2,}", " ").trim();
-
-        // Signos españoles de apertura si hace falta
-        out = ensureSpanishOpeners(out);
-
-        // Puntuación final para una buena cadencia
-        if (!out.matches(".*[\\.!?…]$")) out = out + ".";
-        return out;
-    }
-
-
-    private static String ensureSpanishOpeners(String text) {
-        String[] parts = text.split("(?<=[\\.\\!\\?…])\\s+");
-        for (int i = 0; i < parts.length; i++) {
-            String p = parts[i].trim();
-            if (p.endsWith("?") && !p.startsWith("¿")) parts[i] = "¿" + p;
-            else if (p.endsWith("!") && !p.startsWith("¡")) parts[i] = "¡" + p;
-            else parts[i] = p;
-        }
-        return String.join(" ", parts);
-    }
-
-    private static boolean looksLikePhoneNumber(String s) {
-        if (s == null) return false;
-        String t = s.replaceAll("[^0-9+]", "");
-        return t.length() >= 6;
-    }
-
-    private static String normalizeDialable(String s) {
-        if (s == null) return "";
-        return s.replaceAll("[^0-9+]", "");
     }
 }
