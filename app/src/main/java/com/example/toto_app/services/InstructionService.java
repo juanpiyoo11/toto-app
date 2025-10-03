@@ -12,16 +12,22 @@ import com.example.toto_app.actions.DeviceActions;
 import com.example.toto_app.audio.InstructionCapture;
 import com.example.toto_app.audio.VadUtils;
 import com.example.toto_app.calls.AppState;
-import com.example.toto_app.calls.CallUi;
 import com.example.toto_app.calls.PhoneCallExecutor;
 import com.example.toto_app.network.AskRequest;
 import com.example.toto_app.network.AskResponse;
 import com.example.toto_app.network.NluRouteResponse;
 import com.example.toto_app.network.RetrofitClient;
+import com.example.toto_app.network.SpotifyStatus;
 import com.example.toto_app.nlp.NluResolver;
 import com.example.toto_app.stt.SttClient;
 import com.example.toto_app.util.TtsSanitizer;
 import com.example.toto_app.falls.FallLogic;
+
+// --- Spotify DTOs (nuevos) ---
+import com.example.toto_app.network.SpotifyResponse;
+import com.example.toto_app.network.SpotifyVolumeRequest;
+import com.example.toto_app.network.SpotifyShuffleRequest;
+import com.example.toto_app.network.SpotifyRepeatRequest;
 
 import java.io.File;
 import java.text.ParseException;
@@ -243,7 +249,6 @@ public class InstructionService extends android.app.Service {
             }
         } catch (Throwable ignored) {}
 
-
         // 3) NLU remoto con fallback local
         NluRouteResponse nres = NluResolver.resolveWithFallback(transcript);
         String intentName = (nres != null && nres.intent != null)
@@ -259,11 +264,14 @@ public class InstructionService extends android.app.Service {
             Log.d(TAG, "NLU/route → nres=null");
         }
 
+        // === (CAMBIO) No decir ack_tts antes si es SPOTIFY_PLAY para evitar duplicado ===
         if (nres != null && nres.ack_tts != null && !nres.ack_tts.trim().isEmpty()) {
             boolean isAnswerish = "ANSWER".equals(intentName) || "UNKNOWN".equals(intentName);
+            boolean isSpotifyPlay = "SPOTIFY_PLAY".equals(intentName);
             if (!"QUERY_TIME".equals(intentName) && !"QUERY_DATE".equals(intentName)
                     && !isAnswerish && !"CALL".equals(intentName)
-                    && !"SEND_MESSAGE".equals(intentName)) {
+                    && !"SEND_MESSAGE".equals(intentName)
+                    && !isSpotifyPlay) {
                 sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 6000);
             }
         }
@@ -275,7 +283,8 @@ public class InstructionService extends android.app.Service {
             boolean actionable =
                     "SET_ALARM".equals(intentName) ||
                             "CALL".equals(intentName) ||
-                            "SEND_MESSAGE".equals(intentName);
+                            "SEND_MESSAGE".equals(intentName) ||
+                            "SPOTIFY_PLAY".equals(intentName); // <-- agregado para pedir query
 
             if (actionable) {
                 sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()), 8000);
@@ -356,7 +365,7 @@ public class InstructionService extends android.app.Service {
                 }
 
                 if (rc == null || rc.number == null || rc.number.isEmpty()) {
-                    CallUi.showCallNotification(this, who, null,
+                    NotificationService.showCallNotification(this, who, null,
                             androidx.core.content.ContextCompat.checkSelfPermission(
                                     this, android.Manifest.permission.CALL_PHONE)
                                     == android.content.pm.PackageManager.PERMISSION_GRANTED);
@@ -368,7 +377,7 @@ public class InstructionService extends android.app.Service {
 
                 // Si la app NO está foreground o el dispositivo está bloqueado → notificación tocable
                 if (!AppState.isAppInForeground(this)) {
-                    CallUi.showCallNotification(this, rc.name, rc.number,
+                    NotificationService.showCallNotification(this, rc.name, rc.number,
                             androidx.core.content.ContextCompat.checkSelfPermission(
                                     this, android.Manifest.permission.CALL_PHONE)
                                     == android.content.pm.PackageManager.PERMISSION_GRANTED);
@@ -378,7 +387,7 @@ public class InstructionService extends android.app.Service {
                     return;
                 }
                 if (AppState.isDeviceLocked(this)) {
-                    CallUi.showCallNotification(this, rc.name, rc.number,
+                    NotificationService.showCallNotification(this, rc.name, rc.number,
                             androidx.core.content.ContextCompat.checkSelfPermission(
                                     this, android.Manifest.permission.CALL_PHONE)
                                     == android.content.pm.PackageManager.PERMISSION_GRANTED);
@@ -393,7 +402,7 @@ public class InstructionService extends android.app.Service {
                         == android.content.pm.PackageManager.PERMISSION_GRANTED;
 
                 if (!hasCall && !AppState.isDefaultDialer(this)) {
-                    CallUi.showCallNotification(this, rc.name, rc.number, hasCall);
+                    NotificationService.showCallNotification(this, rc.name, rc.number, hasCall);
                     sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 12000);
                     postWatchdog(8000);
                     stopSelf();
@@ -405,7 +414,7 @@ public class InstructionService extends android.app.Service {
                 if (ok) {
                     sayViaWakeService("Llamando a " + rc.name + ".", 4000);
                 } else {
-                    CallUi.showCallNotification(this, rc.name, rc.number, hasCall);
+                    NotificationService.showCallNotification(this, rc.name, rc.number, hasCall);
                     sayViaWakeService("No pude iniciar la llamada directa. Te dejé una notificación para marcar.", 12000);
                 }
 
@@ -499,6 +508,202 @@ public class InstructionService extends android.app.Service {
                 stopSelf();
                 return;
             }
+
+            // ======== SPOTIFY ========
+            case "SPOTIFY_PLAY": {
+                String query = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
+                if (query == null || query.isBlank()) {
+                    sayViaWakeService("¿Qué querés escuchar en Spotify?", 7000);
+                    stopSelf(); return;
+                }
+
+                // 1) Preflight: estado
+                try {
+                    retrofit2.Response<SpotifyStatus> s = RetrofitClient.api().spotifyStatus().execute();
+                    SpotifyStatus st = s.isSuccessful() ? s.body() : null;
+
+                    if (st == null) {
+                        sayViaWakeService("No pude verificar Spotify ahora.", 6000);
+                        stopSelf(); return;
+                    }
+
+                    if (!st.connected) {
+                        // Ofrecer abrir login (Custom Tab / browser)
+                        String url = st.loginUrl;
+                        // Notificación tocable
+                        Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
+                                this, 1001, i, android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+
+                        NotificationService.simpleActionNotification(this,
+                                "Conectar Spotify",
+                                "Tocá para vincular tu cuenta de Spotify.",
+                                pi);
+
+                        sayViaWakeService("Necesito conectar tu Spotify. Tocá la notificación para autorizar.", 11000);
+                        postWatchdog(8000);
+                        stopSelf(); return;
+                    }
+
+                    if (st.premium != null && !st.premium) {
+                        sayViaWakeService("Tu cuenta de Spotify no es Premium. Necesitás Premium para controlar la reproducción.", 11000);
+                        stopSelf(); return;
+                    }
+
+                    if (st.deviceCount != null && st.deviceCount == 0) {
+                        sayViaWakeService("No encuentro dispositivos de Spotify. Abrí Spotify en tu teléfono y reproducí algo.", 11000);
+                        stopSelf(); return;
+                    }
+
+                    // 2) Ejecutar play con hint de device si lo tenemos
+                    java.util.Map<String,String> body = new java.util.HashMap<>();
+                    body.put("query", query);
+                    if (st.suggestedDeviceId != null) body.put("deviceId", st.suggestedDeviceId);
+
+                    retrofit2.Response<com.google.gson.JsonObject> r = RetrofitClient.api().spotifyPlay(body).execute();
+                    if (r.isSuccessful()) {
+                        if (nres != null && nres.ack_tts != null && !nres.ack_tts.isBlank())
+                            sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 6000);
+                        else
+                            sayViaWakeService("Reproduciendo en Spotify.", 5000);
+                    } else {
+                        String err = null;
+                        try { err = (r.errorBody() != null) ? r.errorBody().string() : null; } catch (Exception ignore) {}
+                        String speak = "No pude reproducir en Spotify ahora.";
+                        if (err != null) {
+                            // intentar detectar errorCode del backend
+                            if (err.contains("NOT_LOGGED_IN")) speak = "Necesitás conectar tu Spotify. Abrí la notificación para autorizar.";
+                            else if (err.contains("PREMIUM_REQUIRED")) speak = "Tu cuenta de Spotify no es Premium.";
+                            else if (err.contains("NO_DEVICE")) speak = "No hay un dispositivo de Spotify activo. Abrí Spotify y reproducí algo.";
+                            else if (err.contains("SEARCH_EMPTY")) speak = "No encontré ese tema en Spotify.";
+                        }
+                        sayViaWakeService(speak, 9000);
+                    }
+
+                } catch (Exception ex) {
+                    Log.e(TAG, "Spotify preflight/play error", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 7000);
+                }
+
+                stopSelf();
+                return;
+            }
+
+            case "SPOTIFY_PAUSE": {
+                try {
+                    retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyPause().execute();
+                    if (r.code() == 401 || r.code() == 403) {
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                    } else if (!isOk(r)) {
+                        sayViaWakeService("No pude pausar Spotify.", 7000);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error /api/spotify/pause", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                }
+                stopSelf(); return;
+            }
+
+            case "SPOTIFY_RESUME": {
+                try {
+                    retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyResume().execute();
+                    if (r.code() == 401 || r.code() == 403) {
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                    } else if (!isOk(r)) {
+                        sayViaWakeService("No pude continuar la reproducción.", 7000);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error /api/spotify/resume", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                }
+                stopSelf(); return;
+            }
+
+            case "SPOTIFY_NEXT": {
+                try {
+                    retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyNext().execute();
+                    if (r.code() == 401 || r.code() == 403) {
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                    } else if (!isOk(r)) {
+                        sayViaWakeService("No pude pasar al siguiente.", 7000);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error /api/spotify/next", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                }
+                stopSelf(); return;
+            }
+
+            case "SPOTIFY_PREV": {
+                try {
+                    retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyPrev().execute();
+                    if (r.code() == 401 || r.code() == 403) {
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                    } else if (!isOk(r)) {
+                        sayViaWakeService("No pude volver al anterior.", 7000);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error /api/spotify/prev", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                }
+                stopSelf(); return;
+            }
+
+            case "SPOTIFY_SET_VOLUME": {
+                String v = (nres != null && nres.slots != null) ? nres.slots.message_text : null; // "40" | "up" | "down"
+                if (v == null || v.trim().isEmpty()) v = "up";
+                try {
+                    retrofit2.Response<SpotifyResponse> r =
+                            RetrofitClient.api().spotifyVolume(new SpotifyVolumeRequest(v.trim())).execute();
+                    if (r.code() == 401 || r.code() == 403) {
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                    } else if (!isOk(r)) {
+                        sayViaWakeService("No pude ajustar el volumen en Spotify.", 8000);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error /api/spotify/volume", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                }
+                stopSelf(); return;
+            }
+
+            case "SPOTIFY_SET_SHUFFLE": {
+                String state = (nres != null && nres.slots != null) ? nres.slots.message_text : null; // "on" | "off"
+                if (state == null || state.isBlank()) state = "on";
+                try {
+                    retrofit2.Response<SpotifyResponse> r =
+                            RetrofitClient.api().spotifyShuffle(new SpotifyShuffleRequest(state)).execute();
+                    if (r.code() == 401 || r.code() == 403) {
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                    } else if (!isOk(r)) {
+                        sayViaWakeService("No pude cambiar el modo aleatorio.", 8000);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error /api/spotify/shuffle", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                }
+                stopSelf(); return;
+            }
+
+            case "SPOTIFY_SET_REPEAT": {
+                String state = (nres != null && nres.slots != null) ? nres.slots.message_text : null; // "track" | "context" | "off"
+                if (state == null || state.isBlank()) state = "track";
+                try {
+                    retrofit2.Response<SpotifyResponse> r =
+                            RetrofitClient.api().spotifyRepeat(new SpotifyRepeatRequest(state)).execute();
+                    if (r.code() == 401 || r.code() == 403) {
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                    } else if (!isOk(r)) {
+                        sayViaWakeService("No pude cambiar el modo de repetición.", 8000);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error /api/spotify/repeat", ex);
+                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                }
+                stopSelf(); return;
+            }
+            // ======== FIN SPOTIFY ========
 
             case "CANCEL": {
                 sayViaWakeService("Listo.", 6000);
@@ -687,5 +892,16 @@ public class InstructionService extends android.app.Service {
         s = s.replaceAll("\\s+", " ").trim();
         s = s.replaceAll("(\\s+por\\s+favor.*$)|(\\s+gracias.*$)", "").trim();
         return s;
+    }
+
+    // ==== Helper Spotify ====
+    private static boolean isOk(retrofit2.Response<SpotifyResponse> r) {
+        if (r == null) return false;
+        if (!r.isSuccessful()) return false;
+        SpotifyResponse b = r.body();
+        if (b == null) return true; // puede no haber body
+        if (b.ok != null) return b.ok;
+        if (b.status != null) return "ok".equalsIgnoreCase(b.status) || "success".equalsIgnoreCase(b.status);
+        return true;
     }
 }

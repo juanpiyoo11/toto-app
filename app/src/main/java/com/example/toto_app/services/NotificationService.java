@@ -1,4 +1,4 @@
-package com.example.toto_app.calls;
+package com.example.toto_app.services;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -10,12 +10,23 @@ import android.net.Uri;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.graphics.Color;
+import android.os.Build;
 
-public final class CallUi {
-    private CallUi(){}
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
+public final class NotificationService {
+    private NotificationService(){}
 
     private static final String CALL_CHANNEL_ID = "toto_call_confirm";
     private static final int CALL_NOTIFY_ID_BASE = 223400;
+    private static final String CHANNEL_ACTIONS_ID = "toto-actions";
+    private static final String CHANNEL_ACTIONS_NAME = "Acciones de Toto";
+    private static final int NOTIF_ID_ACTION_GENERIC = 7001;
 
     public static void showCallNotification(Service svc, String name, @Nullable String number, boolean hasCallPerm) {
         NotificationManager nm = (NotificationManager) svc.getSystemService(Service.NOTIFICATION_SERVICE);
@@ -58,5 +69,40 @@ public final class CallUi {
 
         int notifyId = CALL_NOTIFY_ID_BASE + (who.hashCode() & 0x0FFF);
         nm.notify(notifyId, n);
+    }
+
+    public static void simpleActionNotification(Context ctx,
+                                                String title,
+                                                String text,
+                                                PendingIntent action) {
+        ensureActionsChannel(ctx);
+
+        NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, CHANNEL_ACTIONS_ID)
+                // Usá tu ícono si tenés (R.drawable.ic_stat_toto). Este ícono existe en todos los devices:
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                .setContentIntent(action)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION);
+
+        NotificationManagerCompat.from(ctx).notify(NOTIF_ID_ACTION_GENERIC, b.build());
+    }
+
+    private static void ensureActionsChannel(Context ctx) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                    CHANNEL_ACTIONS_ID,
+                    CHANNEL_ACTIONS_NAME,
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            ch.enableLights(true);
+            ch.setLightColor(Color.GREEN);
+            ch.enableVibration(true);
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            nm.createNotificationChannel(ch);
+        }
     }
 }

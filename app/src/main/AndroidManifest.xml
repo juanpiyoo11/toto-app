@@ -31,7 +31,7 @@
             </intent-filter>
         </activity>
         <activity
-            android:name="com.example.toto_app.telephony.CallLauncherActivity"
+            android:name="com.example.toto_app.calls.CallLauncherActivity"
             android:exported="false"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
