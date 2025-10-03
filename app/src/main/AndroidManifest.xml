@@ -58,6 +58,12 @@
             android:exported="false"
             android:foregroundServiceType="phoneCall" />
 
+        <service
+            android:name="com.example.toto_app.services.FallDetectionService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+
         <receiver
             android:name="com.example.toto_app.AutoStartReceiver"
             android:exported="true"

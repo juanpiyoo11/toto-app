@@ -1,7 +1,6 @@
 package com.example.toto_app;
 
 import android.Manifest;
-import android.app.Activity;
 import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -21,6 +20,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.example.toto_app.falls.FallSignals;
+import com.example.toto_app.services.FallDetectionService;
 import com.example.toto_app.services.WakeWordService;
 
 import java.util.ArrayList;
@@ -57,18 +57,32 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnPause = findViewById(R.id.btnPauseListening);
         btnPause.setOnClickListener(v -> {
-            Intent i = new Intent(this, WakeWordService.class);
-            i.setAction(WakeWordService.ACTION_PAUSE_LISTEN);
-            ContextCompat.startForegroundService(this, i);
-            Toast.makeText(this, "Toto en pausa (no escucha)", Toast.LENGTH_SHORT).show();
+            // Pausar wake word
+            Intent i1 = new Intent(this, WakeWordService.class);
+            i1.setAction(WakeWordService.ACTION_PAUSE_LISTEN);
+            ContextCompat.startForegroundService(this, i1);
+
+            // Pausar detección de caídas por sonido
+            Intent i2 = new Intent(this, FallDetectionService.class);
+            i2.setAction(FallDetectionService.ACTION_PAUSE_FALL);
+            ContextCompat.startForegroundService(this, i2);
+
+            Toast.makeText(this, "Toto en pausa (no escucha, sin detección de caídas)", Toast.LENGTH_SHORT).show();
         });
 
         Button btnResume = findViewById(R.id.btnResumeListening);
         btnResume.setOnClickListener(v -> {
-            Intent i = new Intent(this, WakeWordService.class);
-            i.setAction(WakeWordService.ACTION_RESUME_LISTEN);
-            ContextCompat.startForegroundService(this, i);
-            Toast.makeText(this, "Toto volvió a escuchar", Toast.LENGTH_SHORT).show();
+            // Reanudar wake word
+            Intent i1 = new Intent(this, WakeWordService.class);
+            i1.setAction(WakeWordService.ACTION_RESUME_LISTEN);
+            ContextCompat.startForegroundService(this, i1);
+
+            // Reanudar detección de caídas por sonido
+            Intent i2 = new Intent(this, FallDetectionService.class);
+            i2.setAction(FallDetectionService.ACTION_RESUME_FALL);
+            ContextCompat.startForegroundService(this, i2);
+
+            Toast.makeText(this, "Toto volvió a escuchar (y reanudó caídas)", Toast.LENGTH_SHORT).show();
         });
 
         Button btnStopTts = findViewById(R.id.btnStopTts);
@@ -119,6 +133,7 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this, needed.toArray(new String[0]), REQ_ALL_PERMS);
         } else {
             startWakeWordService();
+            startFallDetectionService();
             maybeRequestIgnoreBatteryOptimizations();
             maybeRequestDefaultDialerRole();
         }
@@ -142,6 +157,15 @@ public class MainActivity extends AppCompatActivity {
         i.putExtra("user_name", userName);
         ContextCompat.startForegroundService(this, i);
         Toast.makeText(this, "Escuchando \"Toto\" en segundo plano", Toast.LENGTH_SHORT).show();
+    }
+
+    private void startFallDetectionService() {
+        Intent svc = new Intent(this, FallDetectionService.class);
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(svc);
+        } else {
+            startService(svc);
+        }
     }
 
     private void maybeRequestIgnoreBatteryOptimizations() {
@@ -179,6 +203,7 @@ public class MainActivity extends AppCompatActivity {
 
             if (micOk) {
                 startWakeWordService();
+                startFallDetectionService();
                 maybeRequestIgnoreBatteryOptimizations();
                 maybeRequestDefaultDialerRole();
 
