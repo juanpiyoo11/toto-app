@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 
 import androidx.core.content.ContextCompat;
 
+import com.example.toto_app.services.FallDetectionService;
 import com.example.toto_app.services.WakeWordService;
 
 public class AutoStartReceiver extends BroadcastReceiver {
@@ -24,8 +25,12 @@ public class AutoStartReceiver extends BroadcastReceiver {
             // Solo si ya tenemos permiso de micrófono (no se puede pedir en background)
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                     == PackageManager.PERMISSION_GRANTED) {
-                Intent i = new Intent(context, WakeWordService.class);
-                ContextCompat.startForegroundService(context, i);
+
+                Intent ww = new Intent(context, WakeWordService.class);
+                ContextCompat.startForegroundService(context, ww);
+
+                Intent yf = new Intent(context, FallDetectionService.class);
+                ContextCompat.startForegroundService(context, yf);
             }
         }
     }
