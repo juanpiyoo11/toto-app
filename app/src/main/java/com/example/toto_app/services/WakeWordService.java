@@ -37,6 +37,7 @@ import org.vosk.android.StorageService;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.Random;
+import java.util.regex.Pattern;
 
 import com.example.toto_app.util.TtsSanitizer;
 
@@ -118,15 +119,8 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     private final BroadcastReceiver cmdFinishedReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            Log.d(TAG, "ACTION_CMD_FINISHED recibido → rearmar wake");
-            triggered = false;
-            lastDetectionText = "";
-            lastDetectionAt = 0L;
-            if (listeningPaused) {
-                Log.d(TAG, "Wake en pausa → no rearmo escucha");
-                return;
-            }
-            startWakeListening();
+            Log.d(TAG, "ACTION_CMD_FINISHED (broadcast) → rearmar wake");
+            rearmWake();
         }
     };
 
@@ -225,7 +219,9 @@ public class WakeWordService extends Service implements RecognitionListener {
             rec.setGrammar("[\"toto\"]");
             speechService = new SpeechService(rec, 16000.0f);
             speechService.startListening(this);
-            requestAudioFocus();
+
+            // ⚠️ Ya NO pedimos audio focus exclusivo para escuchar;
+            // evitamos interferir con Spotify.
             acquireWakeLock();
             Log.d(TAG, "Wake listening iniciado");
             updateForegroundNotification("Escuchando \"Toto\"");
@@ -243,29 +239,6 @@ public class WakeWordService extends Service implements RecognitionListener {
         }
         abandonAudioFocus();
         releaseWakeLock();
-    }
-
-    // Focus para el mic (escucha)
-    private void requestAudioFocus() {
-        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-        if (am == null) return;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            AudioAttributes attrs = new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build();
-
-            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
-                    .setAudioAttributes(attrs)
-                    .setOnAudioFocusChangeListener(fc -> { })
-                    .build();
-            am.requestAudioFocus(audioFocusRequest);
-        } else {
-            am.requestAudioFocus(fc -> { },
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
-        }
     }
 
     // Focus para TTS (hablar)
@@ -350,6 +323,14 @@ public class WakeWordService extends Service implements RecognitionListener {
                 return START_STICKY;
             }
 
+            // NUEVO: si el "fin de comando" llega como startService(Action),
+            // también rearmamos (además del BroadcastReceiver).
+            if (ACTION_CMD_FINISHED.equals(action)) {
+                Log.d(TAG, "ACTION_CMD_FINISHED (startService) → rearmar wake");
+                rearmWake();
+                return START_STICKY;
+            }
+
             if (intent.hasExtra("user_name")) {
                 String incoming = intent.getStringExtra("user_name");
                 if (incoming != null && !incoming.trim().isEmpty()) {
@@ -358,6 +339,19 @@ public class WakeWordService extends Service implements RecognitionListener {
             }
         }
         return START_STICKY;
+    }
+
+    private void rearmWake() {
+        triggered = false;
+        lastDetectionText = "";
+        lastDetectionAt = 0L;
+        if (listeningPaused) {
+            Log.d(TAG, "Wake en pausa → no rearmo escucha");
+            updateForegroundNotification("Pausa: no estoy escuchando");
+            return;
+        }
+        // Aseguramos ejecución en hilo principal
+        new android.os.Handler(getMainLooper()).post(this::startWakeListening);
     }
 
     @Override
@@ -374,27 +368,36 @@ public class WakeWordService extends Service implements RecognitionListener {
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
 
     // === RecognitionListener ===
-    @Override public void onPartialResult(String hypothesis) { }
+    @Override public void onPartialResult(String hypothesis) { checkForWakeWord(hypothesis); }
     @Override public void onResult(String hypothesis) { checkForWakeWord(hypothesis); }
-    @Override public void onFinalResult(String hypothesis) { }
+    @Override public void onFinalResult(String hypothesis) { /* no-op extra */ }
     @Override public void onError(Exception e) { Log.e(TAG, "ASR error", e); }
     @Override public void onTimeout() { }
+
+    private static final Pattern WAKE_PATTERN = Pattern.compile("\\btoto\\b");
 
     private void checkForWakeWord(String json) {
         try {
             JSONObject jo = new JSONObject(json);
-            String text = jo.optString("text", "").toLowerCase().trim();
-            if (text.isEmpty()) return;
+            // Vosk envía "partial" muy seguido y "text" cuando cierra hipótesis
+            String recognized = jo.optString("text", "");
+            if (recognized == null || recognized.trim().isEmpty()) {
+                recognized = jo.optString("partial", "");
+            }
+            if (recognized == null) recognized = "";
+            recognized = recognized.toLowerCase(Locale.ROOT).trim();
+            if (recognized.isEmpty()) return;
 
             long now = SystemClock.elapsedRealtime();
-            if (text.equals(lastDetectionText) && (now - lastDetectionAt) < DEDUPE_WINDOW_MS) {
-                Log.d(TAG, "Detección duplicada ignorada: " + text);
+            if (recognized.equals(lastDetectionText) && (now - lastDetectionAt) < DEDUPE_WINDOW_MS) {
+                Log.d(TAG, "Detección duplicada ignorada: " + recognized);
                 return;
             }
-            lastDetectionText = text;
-            lastDetectionAt = now;
 
-            if (text.contains("toto")) {
+            if (WAKE_PATTERN.matcher(recognized).find()) {
+                lastDetectionText = recognized;
+                lastDetectionAt = now;
+
                 boolean cooling = (now - lastTriggerAt) < MIN_COOLDOWN_MS;
                 if (!triggered && !cooling) {
                     triggered = true;

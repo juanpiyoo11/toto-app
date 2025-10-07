@@ -13,6 +13,9 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
+    <queries>
+        <package android:name="com.spotify.music"/>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -29,7 +32,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="toto" android:host="spotify-auth-callback"/>
+            </intent-filter>
         </activity>
+
         <activity
             android:name="com.example.toto_app.calls.CallLauncherActivity"
             android:exported="false"
@@ -62,7 +73,6 @@
             android:name="com.example.toto_app.services.FallDetectionService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
-
 
         <receiver
             android:name="com.example.toto_app.AutoStartReceiver"
