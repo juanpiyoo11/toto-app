@@ -459,39 +459,41 @@ public class InstructionService extends android.app.Service {
                     retrofit2.Response<SpotifyStatus> s = RetrofitClient.api().spotifyStatus().execute();
                     SpotifyStatus st = s.isSuccessful() ? s.body() : null;
                     if (st == null) { sayViaWakeService("No pude verificar Spotify ahora.", 6000); stopSelf(); return; }
-                    if (!st.connected) {
+
+                    if (!Boolean.TRUE.equals(st.connected)) {
                         String url = st.loginUrl;
                         Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
                         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                         android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
-                                this, 1001, i, android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+                                this, 1001, i,
+                                android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
                         NotificationService.simpleActionNotification(this, "Conectar Spotify",
                                 "Tocá para vincular tu cuenta de Spotify.", pi);
                         sayViaWakeService("Necesito conectar tu Spotify. Tocá la notificación para autorizar.", 11000);
                         postWatchdog(8000); stopSelf(); return;
                     }
+
                     if (st.premium != null && !st.premium) {
                         sayViaWakeService("Tu cuenta de Spotify no es Premium.", 9000);
                         stopSelf(); return;
                     }
 
-                    // SIN intentos extra: si no hay dispositivo, solo aviso/abro Spotify y corto.
-                    if (st.deviceCount != null && st.deviceCount == 0) {
-                        Intent open = getPackageManager().getLaunchIntentForPackage("com.spotify.music");
-                        if (open != null) {
-                            open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
-                                    this, 1002, open, android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
-                            NotificationService.simpleActionNotification(this, "Abrir Spotify",
-                                    "Tocá para activar un dispositivo.", pi);
+                    // Si no hay devices, intentamos activarlo (abrir app o notificación) y esperamos hasta 8s
+                    if (st.deviceCount == null || st.deviceCount == 0) {
+                        boolean activated = ensureSpotifyDeviceActivated(query, /*timeoutMs=*/8000);
+                        if (!activated) {
+                            sayViaWakeService("No encuentro un dispositivo de Spotify. Abrí Spotify una vez y volvemos a intentar.", 11000);
+                            stopSelf(); return;
                         }
-                        sayViaWakeService("No encuentro un dispositivo de Spotify. Abrí Spotify una vez y volvemos a intentar.", 11000);
-                        stopSelf(); return;
                     }
 
                     java.util.Map<String,String> body = new java.util.HashMap<>();
                     body.put("query", query);
-                    if (st.suggestedDeviceId != null) body.put("deviceId", st.suggestedDeviceId);
+
+                    // Si tu backend sugiere un device objetivo, úsalo
+                    if (st.suggestedDeviceId != null && !st.suggestedDeviceId.isEmpty()) {
+                        body.put("deviceId", st.suggestedDeviceId);
+                    }
 
                     retrofit2.Response<com.google.gson.JsonObject> r = RetrofitClient.api().spotifyPlay(body).execute();
                     if (r.isSuccessful()) {
@@ -517,6 +519,7 @@ public class InstructionService extends android.app.Service {
 
                 stopSelf(); return;
             }
+
 
             case "SPOTIFY_PAUSE": {
                 try {
@@ -837,5 +840,66 @@ public class InstructionService extends android.app.Service {
         if (b.ok != null) return b.ok;
         if (b.status != null) return "ok".equalsIgnoreCase(b.status) || "success".equalsIgnoreCase(b.status);
         return true;
+    }
+
+    private boolean tryOpenSpotifyNow(String query) {
+        try {
+            // Abrir búsqueda: activa el device "This phone" al entrar a la app
+            Intent open = new Intent(Intent.ACTION_VIEW,
+                    android.net.Uri.parse("spotify:search:" + android.net.Uri.encode(query)));
+            open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(open);
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "No pude abrir Spotify con URI (cae a abrir paquete): " + e.getMessage());
+            try {
+                Intent fallback = getPackageManager().getLaunchIntentForPackage("com.spotify.music");
+                if (fallback != null) {
+                    fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(fallback);
+                    return true;
+                }
+            } catch (Exception e2) {
+                Log.e(TAG, "No pude abrir Spotify app: ", e2);
+            }
+        }
+        return false;
+    }
+
+    private boolean ensureSpotifyDeviceActivated(String query, int timeoutMs) {
+        long deadline = SystemClock.uptimeMillis() + Math.max(2000, timeoutMs);
+
+        // Si estamos en foreground y desbloqueado, abrimos Spotify ya
+        boolean canLaunchNow = AppState.isAppInForeground(this) && !AppState.isDeviceLocked(this);
+        if (canLaunchNow) {
+            tryOpenSpotifyNow(query);
+        } else {
+            // dejamos notificación con acción para abrir (tu flujo actual)
+            Intent open = getPackageManager().getLaunchIntentForPackage("com.spotify.music");
+            if (open != null) {
+                open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
+                        this, 1002, open,
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+                NotificationService.simpleActionNotification(
+                        this, "Abrir Spotify", "Tocá para activar un dispositivo.", pi);
+            }
+        }
+
+        // Poll a /spotifyStatus hasta que aparezca un device o venza el timeout
+        while (SystemClock.uptimeMillis() < deadline) {
+            try {
+                retrofit2.Response<SpotifyStatus> s = RetrofitClient.api().spotifyStatus().execute();
+                SpotifyStatus st = s.isSuccessful() ? s.body() : null;
+                if (st != null && Boolean.TRUE.equals(st.connected)) {
+                    Integer dc = st.deviceCount;
+                    if (dc != null && dc > 0) return true;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Polling spotifyStatus: " + e.getMessage());
+            }
+            try { Thread.sleep(800); } catch (InterruptedException ignored) {}
+        }
+        return false;
     }
 }
