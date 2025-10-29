@@ -12,20 +12,20 @@ import com.example.toto_app.audio.InstructionCapture;
 import com.example.toto_app.audio.VadUtils;
 import com.example.toto_app.calls.AppState;
 import com.example.toto_app.calls.PhoneCallExecutor;
+import com.example.toto_app.falls.FallLogic;
+import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.network.AskRequest;
 import com.example.toto_app.network.AskResponse;
 import com.example.toto_app.network.NluRouteResponse;
 import com.example.toto_app.network.RetrofitClient;
+import com.example.toto_app.network.SpotifyRepeatRequest;
+import com.example.toto_app.network.SpotifyResponse;
+import com.example.toto_app.network.SpotifyShuffleRequest;
 import com.example.toto_app.network.SpotifyStatus;
+import com.example.toto_app.network.SpotifyVolumeRequest;
 import com.example.toto_app.nlp.NluResolver;
 import com.example.toto_app.stt.SttClient;
 import com.example.toto_app.util.TtsSanitizer;
-import com.example.toto_app.falls.FallLogic;
-
-import com.example.toto_app.network.SpotifyResponse;
-import com.example.toto_app.network.SpotifyVolumeRequest;
-import com.example.toto_app.network.SpotifyShuffleRequest;
-import com.example.toto_app.network.SpotifyRepeatRequest;
 
 import java.io.File;
 import java.text.ParseException;
@@ -50,6 +50,7 @@ public class InstructionService extends android.app.Service {
 
     private static final String EMERGENCY_NAME   = "Tamara";
     private static final String EMERGENCY_NUMBER = "+5491159753115";
+    private boolean fallOwner = false;
 
     @Override public void onCreate() { super.onCreate(); }
 
@@ -72,11 +73,29 @@ public class InstructionService extends android.app.Service {
                 }
             }
         }
+
+        if (fallMode != null) {
+            if (!FallSignals.isActive()) {
+                FallSignals.tryActivate();
+            }
+            fallOwner = true;
+        } else {
+            if (FallSignals.isActive()) {
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+        }
+
         Executors.newSingleThreadExecutor().execute(this::doWork);
         return START_NOT_STICKY;
     }
 
     private void doWork() {
+        if (fallMode == null && FallSignals.isActive()) {
+            stopSelf();
+            return;
+        }
+
         if ("CHECK".equals(fallMode)) {
             String prompt = "Escuché un golpe. ¿Estás bien?";
             sayThenListenHere(prompt, "AWAIT:0");
@@ -116,6 +135,12 @@ public class InstructionService extends android.app.Service {
                     boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
                     if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
                     else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
+                    if (fallOwner) {
+                        FallSignals.clear();
+                        Intent resume = new Intent(this, WakeWordService.class)
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                        androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                    }
                 }
                 try { wav.delete(); } catch (Exception ignore) {}
                 stopSelf();
@@ -144,6 +169,12 @@ public class InstructionService extends android.app.Service {
                     boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
                     if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
                     else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
+                    if (fallOwner) {
+                        FallSignals.clear();
+                        Intent resume = new Intent(this, WakeWordService.class)
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                        androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                    }
                 }
                 stopSelf();
                 return;
@@ -155,10 +186,22 @@ public class InstructionService extends android.app.Service {
                     boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
                     if (ok) sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 8000);
                     else    sayViaWakeService("Quise avisar a " + EMERGENCY_NAME + " pero no pude enviar el mensaje.", 10000);
+                    if (fallOwner) {
+                        FallSignals.clear();
+                        Intent resume = new Intent(this, WakeWordService.class)
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                        androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                    }
                     stopSelf(); return;
                 }
                 case OK: {
                     sayViaWakeService("Me alegro. Si necesitás ayuda, decime.", 5000);
+                    if (fallOwner) {
+                        FallSignals.clear();
+                        Intent resume = new Intent(this, WakeWordService.class)
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                        androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                    }
                     stopSelf(); return;
                 }
                 case UNKNOWN:
@@ -235,7 +278,11 @@ public class InstructionService extends android.app.Service {
                     && !isAnswerish && !"CALL".equals(intentName)
                     && !"SEND_MESSAGE".equals(intentName)
                     && !isSpotifyPlay) {
-                sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 6000);
+                if (!FallSignals.isActive()) {
+                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 6000);
+                } else {
+                    stopSelf(); return;
+                }
             }
         }
 
@@ -250,7 +297,9 @@ public class InstructionService extends android.app.Service {
                             "SPOTIFY_PLAY".equals(intentName);
 
             if (actionable) {
-                sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()), 8000);
+                if (!FallSignals.isActive()) {
+                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()), 8000);
+                }
                 stopSelf();
                 return;
             }
@@ -258,12 +307,14 @@ public class InstructionService extends android.app.Service {
 
         switch (intentName) {
             case "QUERY_TIME": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 Calendar c = Calendar.getInstance();
                 sayViaWakeService("Son las " + DeviceActions.hhmm(
                         c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE)) + ".", 6000);
                 stopSelf(); return;
             }
             case "QUERY_DATE": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 Locale esAR = new Locale("es", "AR");
                 Calendar c = Calendar.getInstance();
                 SimpleDateFormat fmt = new SimpleDateFormat("EEEE, d 'de' MMMM 'de' yyyy", esAR);
@@ -272,6 +323,7 @@ public class InstructionService extends android.app.Service {
                 stopSelf(); return;
             }
             case "SET_ALARM": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 Integer hh = (nres != null && nres.slots != null) ? nres.slots.hour : null;
                 Integer mm = (nres != null && nres.slots != null) ? nres.slots.minute : null;
 
@@ -290,6 +342,7 @@ public class InstructionService extends android.app.Service {
             }
 
             case "CALL": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 String who = (nres != null && nres.slots != null) ? nres.slots.contact_query : null;
                 if (who == null || who.trim().isEmpty()) {
                     sayViaWakeService("¿A quién querés que llame?", 8000);
@@ -373,6 +426,7 @@ public class InstructionService extends android.app.Service {
             }
 
             case "SEND_MESSAGE": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 String who = (nres != null && nres.slots != null) ? nres.slots.contact_query : null;
                 String msg = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
 
@@ -449,6 +503,7 @@ public class InstructionService extends android.app.Service {
             }
 
             case "SPOTIFY_PLAY": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 String query = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
                 if (query == null || query.isBlank()) {
                     sayViaWakeService("¿Qué querés escuchar en Spotify?", 7000);
@@ -478,7 +533,6 @@ public class InstructionService extends android.app.Service {
                         stopSelf(); return;
                     }
 
-                    // Si no hay devices, intentamos activarlo (abrir app o notificación) y esperamos hasta 8s
                     if (st.deviceCount == null || st.deviceCount == 0) {
                         boolean activated = ensureSpotifyDeviceActivated(query, /*timeoutMs=*/8000);
                         if (!activated) {
@@ -489,8 +543,6 @@ public class InstructionService extends android.app.Service {
 
                     java.util.Map<String,String> body = new java.util.HashMap<>();
                     body.put("query", query);
-
-                    // Si tu backend sugiere un device objetivo, úsalo
                     if (st.suggestedDeviceId != null && !st.suggestedDeviceId.isEmpty()) {
                         body.put("deviceId", st.suggestedDeviceId);
                     }
@@ -520,8 +572,8 @@ public class InstructionService extends android.app.Service {
                 stopSelf(); return;
             }
 
-
             case "SPOTIFY_PAUSE": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 try {
                     retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyPause().execute();
                     if (r.code() == 401 || r.code() == 403) {
@@ -537,11 +589,13 @@ public class InstructionService extends android.app.Service {
             }
 
             case "SPOTIFY_RESUME": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 sayViaWakeService("No pude continuar la reproducción.", 7000);
                 stopSelf(); return;
             }
 
             case "SPOTIFY_NEXT": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 try {
                     retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyNext().execute();
                     if (r.code() == 401 || r.code() == 403) {
@@ -557,6 +611,7 @@ public class InstructionService extends android.app.Service {
             }
 
             case "SPOTIFY_PREV": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 try {
                     retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyPrev().execute();
                     if (r.code() == 401 || r.code() == 403) {
@@ -572,6 +627,7 @@ public class InstructionService extends android.app.Service {
             }
 
             case "SPOTIFY_SET_VOLUME": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 String v = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
                 if (v == null || v.trim().isEmpty()) v = "up";
                 try {
@@ -590,6 +646,7 @@ public class InstructionService extends android.app.Service {
             }
 
             case "SPOTIFY_SET_SHUFFLE": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 String state = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
                 if (state == null || state.isBlank()) state = "on";
                 try {
@@ -608,6 +665,7 @@ public class InstructionService extends android.app.Service {
             }
 
             case "SPOTIFY_SET_REPEAT": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 String state = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
                 if (state == null || state.isBlank()) state = "track";
                 try {
@@ -626,12 +684,14 @@ public class InstructionService extends android.app.Service {
             }
 
             case "CANCEL": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 sayViaWakeService("Listo.", 6000);
                 stopSelf(); return;
             }
             case "ANSWER":
             case "UNKNOWN":
             default: {
+                if (FallSignals.isActive()) { stopSelf(); return; }
                 try {
                     AskRequest rq = new AskRequest();
                     rq.prompt = transcript;
@@ -844,7 +904,6 @@ public class InstructionService extends android.app.Service {
 
     private boolean tryOpenSpotifyNow(String query) {
         try {
-            // Abrir búsqueda: activa el device "This phone" al entrar a la app
             Intent open = new Intent(Intent.ACTION_VIEW,
                     android.net.Uri.parse("spotify:search:" + android.net.Uri.encode(query)));
             open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -869,12 +928,10 @@ public class InstructionService extends android.app.Service {
     private boolean ensureSpotifyDeviceActivated(String query, int timeoutMs) {
         long deadline = SystemClock.uptimeMillis() + Math.max(2000, timeoutMs);
 
-        // Si estamos en foreground y desbloqueado, abrimos Spotify ya
         boolean canLaunchNow = AppState.isAppInForeground(this) && !AppState.isDeviceLocked(this);
         if (canLaunchNow) {
             tryOpenSpotifyNow(query);
         } else {
-            // dejamos notificación con acción para abrir (tu flujo actual)
             Intent open = getPackageManager().getLaunchIntentForPackage("com.spotify.music");
             if (open != null) {
                 open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -886,7 +943,6 @@ public class InstructionService extends android.app.Service {
             }
         }
 
-        // Poll a /spotifyStatus hasta que aparezca un device o venza el timeout
         while (SystemClock.uptimeMillis() < deadline) {
             try {
                 retrofit2.Response<SpotifyStatus> s = RetrofitClient.api().spotifyStatus().execute();
