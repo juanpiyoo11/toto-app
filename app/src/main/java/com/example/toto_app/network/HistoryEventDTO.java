@@ -7,7 +7,8 @@ public class HistoryEventDTO {
     private String details;
     private String timestamp;
 
-    public HistoryEventDTO() {}
+    public HistoryEventDTO() {
+    }
 
     public HistoryEventDTO(Long userId, String eventType, String details) {
         this.userId = userId;

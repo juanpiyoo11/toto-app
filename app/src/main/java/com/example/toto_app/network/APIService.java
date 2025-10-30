@@ -51,8 +51,7 @@ public interface APIService {
     @GET("api/reminders")
     Call<List<ReminderDTO>> getReminders(
             @Query("elderlyId") Long elderlyId,
-            @Query("activeOnly") Boolean activeOnly
-    );
+            @Query("activeOnly") Boolean activeOnly);
 
     @GET("api/reminders/{id}")
     Call<ReminderDTO> getReminderById(@Path("id") Long id);
@@ -74,8 +73,7 @@ public interface APIService {
     Call<List<HistoryEventDTO>> getHistory(
             @Query("userId") Long userId,
             @Query("start") String start,
-            @Query("end") String end
-    );
+            @Query("end") String end);
 
     @GET("api/history/{id}")
     Call<HistoryEventDTO> getHistoryEventById(@Path("id") Long id);
@@ -89,8 +87,7 @@ public interface APIService {
     Call<TranscriptionResponse> transcribe(
             @Part MultipartBody.Part audio,
             @Part("language") RequestBody language,
-            @Part("userName") RequestBody userName
-    );
+            @Part("userName") RequestBody userName);
 
     @POST("api/ask")
     Call<AskResponse> ask(@Body AskRequest body);

@@ -9,7 +9,8 @@ public class ContactDTO {
     private String createdAt;
     private String updatedAt;
 
-    public ContactDTO() {}
+    public ContactDTO() {
+    }
 
     public ContactDTO(Long elderlyId, String name, String relationship, String phone) {
         this.elderlyId = elderlyId;

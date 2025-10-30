@@ -11,7 +11,8 @@ public class ReminderDTO {
     private String createdAt;
     private String updatedAt;
 
-    public ReminderDTO() {}
+    public ReminderDTO() {
+    }
 
     public ReminderDTO(Long elderlyId, String title, String description, String reminderTime, String repeatPattern) {
         this.elderlyId = elderlyId;

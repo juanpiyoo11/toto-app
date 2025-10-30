@@ -14,7 +14,8 @@ public final class RetrofitClient {
     private static volatile APIService INSTANCE;
     private static Context appContext;
 
-    private RetrofitClient() {}
+    private RetrofitClient() {
+    }
 
     public static void init(Context context) {
         appContext = context.getApplicationContext();
