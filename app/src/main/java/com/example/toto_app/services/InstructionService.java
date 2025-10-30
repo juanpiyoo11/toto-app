@@ -133,12 +133,13 @@ public class InstructionService extends android.app.Service {
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
                     boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
-                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
-                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
+                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
+                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
-                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN)
+                                .putExtra(WakeWordService.EXTRA_REASON, WakeWordService.REASON_FALL_CLEAR);
                         androidx.core.content.ContextCompat.startForegroundService(this, resume);
                     }
                 }
@@ -146,7 +147,7 @@ public class InstructionService extends android.app.Service {
                 stopSelf();
                 return;
             } else {
-                sayViaWakeService("No te escuché bien.", 5000);
+                sayViaWakeService("No te escuché bien.", 0);
                 try { wav.delete(); } catch (Exception ignore) {}
                 stopSelf();
                 return;
@@ -167,12 +168,13 @@ public class InstructionService extends android.app.Service {
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
                     boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
-                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 10000);
-                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 12000);
+                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
+                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
-                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN)
+                                .putExtra(WakeWordService.EXTRA_REASON, WakeWordService.REASON_FALL_CLEAR);
                         androidx.core.content.ContextCompat.startForegroundService(this, resume);
                     }
                 }
@@ -184,22 +186,24 @@ public class InstructionService extends android.app.Service {
             switch (fr) {
                 case HELP: {
                     boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
-                    if (ok) sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 8000);
-                    else    sayViaWakeService("Quise avisar a " + EMERGENCY_NAME + " pero no pude enviar el mensaje.", 10000);
+                    if (ok) sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 0);
+                    else    sayViaWakeService("Quise avisar a " + EMERGENCY_NAME + " pero no pude enviar el mensaje.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
-                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN)
+                                .putExtra(WakeWordService.EXTRA_REASON, WakeWordService.REASON_FALL_CLEAR);
                         androidx.core.content.ContextCompat.startForegroundService(this, resume);
                     }
                     stopSelf(); return;
                 }
                 case OK: {
-                    sayViaWakeService("Me alegro. Si necesitás ayuda, decime.", 5000);
+                    sayViaWakeService("Me alegro. Si necesitás ayuda, decime.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
-                                .setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                                .setAction(WakeWordService.ACTION_RESUME_LISTEN)
+                                .putExtra(WakeWordService.EXTRA_REASON, WakeWordService.REASON_FALL_CLEAR);
                         androidx.core.content.ContextCompat.startForegroundService(this, resume);
                     }
                     stopSelf(); return;
@@ -213,7 +217,7 @@ public class InstructionService extends android.app.Service {
         }
 
         if (transcript.isEmpty()) {
-            sayViaWakeService("No te escuché bien.", 6000);
+            sayViaWakeService("No te escuché bien.", 0);
             stopSelf();
             return;
         }
@@ -250,7 +254,7 @@ public class InstructionService extends android.app.Service {
                 IncomingMessageStore.Msg m = IncomingMessageStore.get().consume();
                 if (m != null) {
                     String tts = (m.from == null ? "alguien" : m.from) + " dice: " + (m.body == null ? "…" : m.body);
-                    sayViaWakeService(tts, 8000);
+                    sayViaWakeService(tts, 0);
                     stopSelf();
                     return;
                 }
@@ -279,7 +283,7 @@ public class InstructionService extends android.app.Service {
                     && !"SEND_MESSAGE".equals(intentName)
                     && !isSpotifyPlay) {
                 if (!FallSignals.isActive()) {
-                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 6000);
+                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 0);
                 } else {
                     stopSelf(); return;
                 }
@@ -298,7 +302,7 @@ public class InstructionService extends android.app.Service {
 
             if (actionable) {
                 if (!FallSignals.isActive()) {
-                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()), 8000);
+                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()), 0);
                 }
                 stopSelf();
                 return;
@@ -310,7 +314,7 @@ public class InstructionService extends android.app.Service {
                 if (FallSignals.isActive()) { stopSelf(); return; }
                 Calendar c = Calendar.getInstance();
                 sayViaWakeService("Son las " + DeviceActions.hhmm(
-                        c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE)) + ".", 6000);
+                        c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE)) + ".", 0);
                 stopSelf(); return;
             }
             case "QUERY_DATE": {
@@ -319,7 +323,7 @@ public class InstructionService extends android.app.Service {
                 Calendar c = Calendar.getInstance();
                 SimpleDateFormat fmt = new SimpleDateFormat("EEEE, d 'de' MMMM 'de' yyyy", esAR);
                 String pretty = capitalizeFirst(fmt.format(c.getTime()), esAR);
-                sayViaWakeService("Hoy es " + pretty + ".", 6000);
+                sayViaWakeService("Hoy es " + pretty + ".", 0);
                 stopSelf(); return;
             }
             case "SET_ALARM": {
@@ -333,7 +337,7 @@ public class InstructionService extends android.app.Service {
                     if (hm != null) { hh = hm[0]; mm = hm[1]; }
                 }
                 if (hh == null || mm == null) {
-                    sayViaWakeService("¿Para qué hora querés la alarma?", 8000);
+                    sayViaWakeService("¿Para qué hora querés la alarma?", 0);
                     stopSelf(); return;
                 }
                 DeviceActions.AlarmResult res = DeviceActions.setAlarm(this, hh, mm, "Toto");
@@ -345,7 +349,7 @@ public class InstructionService extends android.app.Service {
                 if (FallSignals.isActive()) { stopSelf(); return; }
                 String who = (nres != null && nres.slots != null) ? nres.slots.contact_query : null;
                 if (who == null || who.trim().isEmpty()) {
-                    sayViaWakeService("¿A quién querés que llame?", 8000);
+                    sayViaWakeService("¿A quién querés que llame?", 0);
                     stopSelf(); return;
                 }
 
@@ -354,7 +358,7 @@ public class InstructionService extends android.app.Service {
                         == android.content.pm.PackageManager.PERMISSION_GRANTED;
 
                 if (!hasContacts) {
-                    sayViaWakeService("Necesito permiso de contactos para llamar por nombre. Abrí la app para darlo.", 10000);
+                    sayViaWakeService("Necesito permiso de contactos para llamar por nombre. Abrí la app para darlo.", 0);
                     Intent perm = new Intent(this, com.example.toto_app.MainActivity.class)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             .putExtra("request_contacts_perm", true);
@@ -378,7 +382,7 @@ public class InstructionService extends android.app.Service {
                             androidx.core.content.ContextCompat.checkSelfPermission(
                                     this, android.Manifest.permission.CALL_PHONE)
                                     == android.content.pm.PackageManager.PERMISSION_GRANTED);
-                    sayViaWakeService("No encontré a " + who + " en tus contactos. Te dejé una notificación para marcar.", 12000);
+                    sayViaWakeService("No encontré a " + who + " en tus contactos. Te dejé una notificación para marcar.", 0);
                     postWatchdog(8000);
                     stopSelf(); return;
                 }
@@ -388,7 +392,7 @@ public class InstructionService extends android.app.Service {
                             androidx.core.content.ContextCompat.checkSelfPermission(
                                     this, android.Manifest.permission.CALL_PHONE)
                                     == android.content.pm.PackageManager.PERMISSION_GRANTED);
-                    sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 10000);
+                    sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 0);
                     postWatchdog(8000);
                     stopSelf(); return;
                 }
@@ -397,7 +401,7 @@ public class InstructionService extends android.app.Service {
                             androidx.core.content.ContextCompat.checkSelfPermission(
                                     this, android.Manifest.permission.CALL_PHONE)
                                     == android.content.pm.PackageManager.PERMISSION_GRANTED);
-                    sayViaWakeService("Desbloqueá y tocá la notificación para llamar a " + rc.name + ".", 12000);
+                    sayViaWakeService("Desbloqueá y tocá la notificación para llamar a " + rc.name + ".", 0);
                     postWatchdog(8000);
                     stopSelf(); return;
                 }
@@ -408,17 +412,17 @@ public class InstructionService extends android.app.Service {
 
                 if (!hasCall && !AppState.isDefaultDialer(this)) {
                     NotificationService.showCallNotification(this, rc.name, rc.number, hasCall);
-                    sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 12000);
+                    sayViaWakeService("Tocá la notificación para llamar a " + rc.name + ".", 0);
                     postWatchdog(8000);
                     stopSelf(); return;
                 }
 
                 PhoneCallExecutor calls = new PhoneCallExecutor(this);
                 boolean ok = calls.placeDirectCall(rc.name, rc.number, AppState.isDefaultDialer(this));
-                if (ok) sayViaWakeService("Llamando a " + rc.name + ".", 4000);
+                if (ok) sayViaWakeService("Llamando a " + rc.name + ".", 0);
                 else {
                     NotificationService.showCallNotification(this, rc.name, rc.number, hasCall);
-                    sayViaWakeService("No pude iniciar la llamada directa. Te dejé una notificación para marcar.", 12000);
+                    sayViaWakeService("No pude iniciar la llamada directa. Te dejé una notificación para marcar.", 0);
                 }
 
                 postWatchdog(8000);
@@ -437,7 +441,7 @@ public class InstructionService extends android.app.Service {
                 }
 
                 if (who == null || who.trim().isEmpty()) {
-                    sayViaWakeService("¿A quién querés mandarle el mensaje?", 9000);
+                    sayViaWakeService("¿A quién querés mandarle el mensaje?", 0);
                     stopSelf(); return;
                 }
 
@@ -446,7 +450,7 @@ public class InstructionService extends android.app.Service {
                         == android.content.pm.PackageManager.PERMISSION_GRANTED;
 
                 if (!hasContacts) {
-                    sayViaWakeService("Necesito permiso de contactos para mandar por nombre. Abrí la app para darlo.", 10000);
+                    sayViaWakeService("Necesito permiso de contactos para mandar por nombre. Abrí la app para darlo.", 0);
                     Intent perm = new Intent(this, com.example.toto_app.MainActivity.class)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             .putExtra("request_contacts_perm", true);
@@ -457,12 +461,12 @@ public class InstructionService extends android.app.Service {
 
                 DeviceActions.ResolvedContact rc = DeviceActions.resolveContactByNameFuzzy(this, who);
                 if (rc == null || rc.number == null || rc.number.isEmpty()) {
-                    sayViaWakeService("No encontré a " + who + " en tus contactos.", 9000);
+                    sayViaWakeService("No encontré a " + who + " en tus contactos.", 0);
                     stopSelf(); return;
                 }
 
                 if (msg == null || msg.trim().isEmpty()) {
-                    sayViaWakeService("¿Qué querés que le diga a " + rc.name + "?", 9000);
+                    sayViaWakeService("¿Qué querés que le diga a " + rc.name + "?", 0);
                     stopSelf(); return;
                 }
 
@@ -481,7 +485,7 @@ public class InstructionService extends android.app.Service {
                                     || "ok_template".equalsIgnoreCase(wbody.status)
                                     || (wbody.id != null && !wbody.id.trim().isEmpty()));
 
-                    if (ok) sayViaWakeService("Listo, le mandé el mensaje a " + rc.name + ".", 8000);
+                    if (ok) sayViaWakeService("Listo, le mandé el mensaje a " + rc.name + ".", 0);
                     else {
                         String err = null;
                         try { err = (wresp.errorBody() != null) ? wresp.errorBody().string() : null; } catch (Exception ignored) {}
@@ -490,13 +494,13 @@ public class InstructionService extends android.app.Service {
                                 + " id=" + (wbody != null ? wbody.id : "null")
                                 + " err=" + err);
                         if (err != null && (err.contains("recipient_not_allowed") || err.contains("131030")))
-                            sayViaWakeService("No pude enviar por WhatsApp porque ese número no está autorizado aún.", 12000);
+                            sayViaWakeService("No pude enviar por WhatsApp porque ese número no está autorizado aún.", 0);
                         else
-                            sayViaWakeService("No pude mandar el mensaje ahora.", 8000);
+                            sayViaWakeService("No pude mandar el mensaje ahora.", 0);
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/whatsapp/send", ex);
-                    sayViaWakeService("Tuve un problema mandando el mensaje.", 8000);
+                    sayViaWakeService("Tuve un problema mandando el mensaje.", 0);
                 }
 
                 stopSelf(); return;
@@ -506,14 +510,14 @@ public class InstructionService extends android.app.Service {
                 if (FallSignals.isActive()) { stopSelf(); return; }
                 String query = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
                 if (query == null || query.isBlank()) {
-                    sayViaWakeService("¿Qué querés escuchar en Spotify?", 7000);
+                    sayViaWakeService("¿Qué querés escuchar en Spotify?", 0);
                     stopSelf(); return;
                 }
 
                 try {
                     retrofit2.Response<SpotifyStatus> s = RetrofitClient.api().spotifyStatus().execute();
                     SpotifyStatus st = s.isSuccessful() ? s.body() : null;
-                    if (st == null) { sayViaWakeService("No pude verificar Spotify ahora.", 6000); stopSelf(); return; }
+                    if (st == null) { sayViaWakeService("No pude verificar Spotify ahora.", 0); stopSelf(); return; }
 
                     if (!Boolean.TRUE.equals(st.connected)) {
                         String url = st.loginUrl;
@@ -524,19 +528,19 @@ public class InstructionService extends android.app.Service {
                                 android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
                         NotificationService.simpleActionNotification(this, "Conectar Spotify",
                                 "Tocá para vincular tu cuenta de Spotify.", pi);
-                        sayViaWakeService("Necesito conectar tu Spotify. Tocá la notificación para autorizar.", 11000);
+                        sayViaWakeService("Necesito conectar tu Spotify. Tocá la notificación para autorizar.", 0);
                         postWatchdog(8000); stopSelf(); return;
                     }
 
                     if (st.premium != null && !st.premium) {
-                        sayViaWakeService("Tu cuenta de Spotify no es Premium.", 9000);
+                        sayViaWakeService("Tu cuenta de Spotify no es Premium.", 0);
                         stopSelf(); return;
                     }
 
                     if (st.deviceCount == null || st.deviceCount == 0) {
                         boolean activated = ensureSpotifyDeviceActivated(query, /*timeoutMs=*/8000);
                         if (!activated) {
-                            sayViaWakeService("No encuentro un dispositivo de Spotify. Abrí Spotify una vez y volvemos a intentar.", 11000);
+                            sayViaWakeService("No encuentro un dispositivo de Spotify. Abrí Spotify una vez y volvemos a intentar.", 0);
                             stopSelf(); return;
                         }
                     }
@@ -561,12 +565,12 @@ public class InstructionService extends android.app.Service {
                             else if (err.contains("NO_DEVICE")) speak = "No hay un dispositivo de Spotify activo.";
                             else if (err.contains("SEARCH_EMPTY")) speak = "No encontré ese tema en Spotify.";
                         }
-                        sayViaWakeService(speak, 9000);
+                        sayViaWakeService(speak, 0);
                     }
 
                 } catch (Exception ex) {
                     Log.e(TAG, "Spotify play error", ex);
-                    sayViaWakeService("Tuve un problema con Spotify.", 7000);
+                    sayViaWakeService("Tuve un problema con Spotify.", 0);
                 }
 
                 stopSelf(); return;
@@ -577,20 +581,20 @@ public class InstructionService extends android.app.Service {
                 try {
                     retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyPause().execute();
                     if (r.code() == 401 || r.code() == 403) {
-                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 0);
                     } else if (!isOk(r)) {
-                        sayViaWakeService("No pude pausar Spotify.", 7000);
+                        sayViaWakeService("No pude pausar Spotify.", 0);
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/spotify/pause", ex);
-                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                    sayViaWakeService("Tuve un problema con Spotify.", 0);
                 }
                 stopSelf(); return;
             }
 
             case "SPOTIFY_RESUME": {
                 if (FallSignals.isActive()) { stopSelf(); return; }
-                sayViaWakeService("No pude continuar la reproducción.", 7000);
+                sayViaWakeService("No pude continuar la reproducción.", 0);
                 stopSelf(); return;
             }
 
@@ -599,13 +603,13 @@ public class InstructionService extends android.app.Service {
                 try {
                     retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyNext().execute();
                     if (r.code() == 401 || r.code() == 403) {
-                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 0);
                     } else if (!isOk(r)) {
-                        sayViaWakeService("No pude pasar al siguiente.", 7000);
+                        sayViaWakeService("No pude pasar al siguiente.", 0);
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/spotify/next", ex);
-                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                    sayViaWakeService("Tuve un problema con Spotify.", 0);
                 }
                 stopSelf(); return;
             }
@@ -615,13 +619,13 @@ public class InstructionService extends android.app.Service {
                 try {
                     retrofit2.Response<SpotifyResponse> r = RetrofitClient.api().spotifyPrev().execute();
                     if (r.code() == 401 || r.code() == 403) {
-                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 0);
                     } else if (!isOk(r)) {
-                        sayViaWakeService("No pude volver al anterior.", 7000);
+                        sayViaWakeService("No pude volver al anterior.", 0);
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/spotify/prev", ex);
-                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                    sayViaWakeService("Tuve un problema con Spotify.", 0);
                 }
                 stopSelf(); return;
             }
@@ -634,13 +638,13 @@ public class InstructionService extends android.app.Service {
                     retrofit2.Response<SpotifyResponse> r =
                             RetrofitClient.api().spotifyVolume(new SpotifyVolumeRequest(v.trim())).execute();
                     if (r.code() == 401 || r.code() == 403) {
-                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 0);
                     } else if (!isOk(r)) {
-                        sayViaWakeService("No pude ajustar el volumen en Spotify.", 8000);
+                        sayViaWakeService("No pude ajustar el volumen en Spotify.", 0);
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/spotify/volume", ex);
-                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                    sayViaWakeService("Tuve un problema con Spotify.", 0);
                 }
                 stopSelf(); return;
             }
@@ -653,13 +657,13 @@ public class InstructionService extends android.app.Service {
                     retrofit2.Response<SpotifyResponse> r =
                             RetrofitClient.api().spotifyShuffle(new SpotifyShuffleRequest(state)).execute();
                     if (r.code() == 401 || r.code() == 403) {
-                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 0);
                     } else if (!isOk(r)) {
-                        sayViaWakeService("No pude cambiar el modo aleatorio.", 8000);
+                        sayViaWakeService("No pude cambiar el modo aleatorio.", 0);
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/spotify/shuffle", ex);
-                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                    sayViaWakeService("Tuve un problema con Spotify.", 0);
                 }
                 stopSelf(); return;
             }
@@ -672,20 +676,20 @@ public class InstructionService extends android.app.Service {
                     retrofit2.Response<SpotifyResponse> r =
                             RetrofitClient.api().spotifyRepeat(new SpotifyRepeatRequest(state)).execute();
                     if (r.code() == 401 || r.code() == 403) {
-                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 9000);
+                        sayViaWakeService("Necesitás vincular tu cuenta de Spotify en la app.", 0);
                     } else if (!isOk(r)) {
-                        sayViaWakeService("No pude cambiar el modo de repetición.", 8000);
+                        sayViaWakeService("No pude cambiar el modo de repetición.", 0);
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/spotify/repeat", ex);
-                    sayViaWakeService("Tuve un problema con Spotify.", 8000);
+                    sayViaWakeService("Tuve un problema con Spotify.", 0);
                 }
                 stopSelf(); return;
             }
 
             case "CANCEL": {
                 if (FallSignals.isActive()) { stopSelf(); return; }
-                sayViaWakeService("Listo.", 6000);
+                sayViaWakeService("Listo.", 0);
                 stopSelf(); return;
             }
             case "ANSWER":
@@ -699,10 +703,10 @@ public class InstructionService extends android.app.Service {
                     String reply = (r2.isSuccessful() && r2.body() != null && r2.body().reply != null)
                             ? r2.body().reply.trim()
                             : "No estoy seguro, ¿podés repetir?";
-                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(reply), 12000);
+                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(reply), 0);
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/ask", ex);
-                    sayViaWakeService("Tuve un problema procesando eso.", 8000);
+                    sayViaWakeService("Tuve un problema procesando eso.", 0);
                 }
                 stopSelf(); return;
             }
@@ -724,13 +728,13 @@ public class InstructionService extends android.app.Service {
     private void handleAlarmResult(DeviceActions.AlarmResult res, String when) {
         switch (res) {
             case SET_SILENT:
-                sayViaWakeService("Listo, te pongo una alarma para las " + when + ".", 12000);
+                sayViaWakeService("Listo, te pongo una alarma para las " + when + ".", 0);
                 break;
             case UI_ACTION_REQUIRED:
-                sayViaWakeService("Te dejé una notificación para confirmar la alarma de las " + when + ".", 12000);
+                sayViaWakeService("Te dejé una notificación para confirmar la alarma de las " + when + ".", 0);
                 break;
             default:
-                sayViaWakeService("No pude crear la alarma. Fijate permisos del reloj.", 10000);
+                sayViaWakeService("No pude crear la alarma. Fijate permisos del reloj.", 0);
                 break;
         }
     }

@@ -46,16 +46,18 @@ public class WakeWordService extends Service implements RecognitionListener {
     public static final String ACTION_CMD_FINISHED  = "com.example.toto_app.ACTION_CMD_FINISHED";
     public static final String ACTION_SAY           = "com.example.toto_app.ACTION_SAY";
 
-    // Control de escucha (ya existentes)
     public static final String ACTION_PAUSE_LISTEN  = "com.example.toto_app.ACTION_PAUSE_LISTEN";
     public static final String ACTION_RESUME_LISTEN = "com.example.toto_app.ACTION_RESUME_LISTEN";
 
-    // Cortar TTS en curso
     public static final String ACTION_STOP_TTS      = "com.example.toto_app.ACTION_STOP_TTS";
 
     public static final String EXTRA_AFTER_SAY_START_SERVICE = "after_say_start_service";
     public static final String EXTRA_AFTER_SAY_USER_NAME     = "after_say_user_name";
     public static final String EXTRA_AFTER_SAY_FALL_MODE     = "after_say_fall_mode";
+
+    public static final String EXTRA_REASON         = "reason";
+    public static final String REASON_FALL_CLEAR    = "FALL_CLEAR";
+
     @Nullable private Intent pendingAfterSay;
 
     private static final String TAG = "WakeWord";
@@ -88,6 +90,8 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     // “tipo” de lo que se está diciendo ahora ("ACK" o "SAY")
     @Nullable private String currentUtteranceKind = null;
+
+    private volatile long blockWakeUntilMs = 0L;
 
     private static final String[] ACK_TEMPLATES = new String[] {
             "¿En qué te puedo ayudar, %s?",
@@ -335,12 +339,16 @@ public class WakeWordService extends Service implements RecognitionListener {
                 return START_NOT_STICKY;
             }
 
-            // Pausar/Reanudar escucha
             if (ACTION_PAUSE_LISTEN.equals(action)) {
                 pauseListening();
                 return START_STICKY;
             }
             if (ACTION_RESUME_LISTEN.equals(action)) {
+               String reason = intent.getStringExtra(EXTRA_REASON);
+                if (REASON_FALL_CLEAR.equals(reason)) {
+                    blockWakeUntilMs = SystemClock.elapsedRealtime() + 3000;
+                    Log.d(TAG, "Resume after FALL_CLEAR → block wake until " + blockWakeUntilMs);
+                }
                 resumeListening();
                 return START_STICKY;
             }
@@ -403,6 +411,15 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     private void checkForWakeWord(String json) {
         try {
+            long now = SystemClock.elapsedRealtime();
+            if (now < blockWakeUntilMs) {
+                return;
+            }
+
+            if (FallSignals.isActive()) {
+                return;
+            }
+
             JSONObject jo = new JSONObject(json);
             String recognized = jo.optString("text", "");
             if (recognized == null || recognized.trim().isEmpty()) {
@@ -412,7 +429,6 @@ public class WakeWordService extends Service implements RecognitionListener {
             recognized = recognized.toLowerCase(Locale.ROOT).trim();
             if (recognized.isEmpty()) return;
 
-            long now = SystemClock.elapsedRealtime();
             if (recognized.equals(lastDetectionText) && (now - lastDetectionAt) < DEDUPE_WINDOW_MS) {
                 Log.d(TAG, "Detección duplicada ignorada: " + recognized);
                 return;
