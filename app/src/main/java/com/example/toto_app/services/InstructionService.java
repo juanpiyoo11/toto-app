@@ -278,10 +278,12 @@ public class InstructionService extends android.app.Service {
         if (nres != null && nres.ack_tts != null && !nres.ack_tts.trim().isEmpty()) {
             boolean isAnswerish = "ANSWER".equals(intentName) || "UNKNOWN".equals(intentName);
             boolean isSpotifyPlay = "SPOTIFY_PLAY".equals(intentName);
+            boolean isFall = "FALL".equals(intentName);
             if (!"QUERY_TIME".equals(intentName) && !"QUERY_DATE".equals(intentName)
                     && !isAnswerish && !"CALL".equals(intentName)
                     && !"SEND_MESSAGE".equals(intentName)
-                    && !isSpotifyPlay) {
+                    && !isSpotifyPlay
+                    && !isFall) {
                 if (!FallSignals.isActive()) {
                     sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 0);
                 } else {
@@ -310,6 +312,15 @@ public class InstructionService extends android.app.Service {
         }
 
         switch (intentName) {
+            case "FALL": {
+                if (!FallSignals.isActive()) {
+                    FallSignals.tryActivate();
+                    fallOwner = true;
+                }
+                sayThenListenHere("¿Estás bien?", "AWAIT:0");
+                stopSelf(); return;
+            }
+
             case "QUERY_TIME": {
                 if (FallSignals.isActive()) { stopSelf(); return; }
                 Calendar c = Calendar.getInstance();
