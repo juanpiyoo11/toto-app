@@ -15,6 +15,17 @@ import retrofit2.http.Part;
 
 public interface APIService {
 
+    // Authentication endpoints
+    @POST("api/auth/login")
+    Call<LoginResponse> login(@Body LoginRequest request);
+
+    @POST("api/auth/register")
+    Call<LoginResponse> register(@Body RegisterRequest request);
+
+    @POST("api/auth/refresh")
+    Call<LoginResponse> refreshToken(@Body RefreshTokenRequest request);
+
+    // Existing endpoints
     @Multipart
     @POST("api/stt")
     Call<TranscriptionResponse> transcribe(
