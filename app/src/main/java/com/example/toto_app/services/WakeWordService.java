@@ -183,6 +183,7 @@ public class WakeWordService extends Service implements RecognitionListener {
                 new StorageService.Callback<Model>() {
                     @Override public void onComplete(Model m) {
                         model = m;
+                        com.example.toto_app.services.WakeWordServiceModelHolder.setModel(m);
                         startWakeListening();
                     }
                 },

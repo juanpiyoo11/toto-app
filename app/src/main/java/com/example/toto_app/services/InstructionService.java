@@ -132,9 +132,10 @@ public class InstructionService extends android.app.Service {
                 if (fallRetry <= 0) {
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
-                    boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
-                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
-                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
+                    int res = FallLogic.sendEmergencyMessageToResult(EMERGENCY_NUMBER, userName);
+                    if (res == 0) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión. En cuanto vuelva, enviaré el mensaje de emergencia.", 0);
+                    else sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -167,9 +168,10 @@ public class InstructionService extends android.app.Service {
                 if (fallRetry <= 0) {
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
-                    boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
-                    if (ok) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
-                    else    sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
+                    int res = FallLogic.sendEmergencyMessageToResult(EMERGENCY_NUMBER, userName);
+                    if (res == 0) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión. En cuanto vuelva, enviaré el mensaje de emergencia.", 0);
+                    else sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -185,8 +187,9 @@ public class InstructionService extends android.app.Service {
             FallLogic.FallReply fr = FallLogic.assessFallReply(norm);
             switch (fr) {
                 case HELP: {
-                    boolean ok = FallLogic.sendEmergencyMessageTo(EMERGENCY_NUMBER, userName);
-                    if (ok) sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 0);
+                    int res = FallLogic.sendEmergencyMessageToResult(EMERGENCY_NUMBER, userName);
+                    if (res == 0) sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión. En cuanto vuelva, enviaré el mensaje de emergencia.", 0);
                     else    sayViaWakeService("Quise avisar a " + EMERGENCY_NAME + " pero no pude enviar el mensaje.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
@@ -349,6 +352,18 @@ public class InstructionService extends android.app.Service {
                 }
                 if (hh == null || mm == null) {
                     sayViaWakeService("¿Para qué hora querés la alarma?", 0);
+                    stopSelf(); return;
+                }
+                // Si el backend está caído, no permitimos crear alarmas (según solicitud)
+                try {
+                    boolean backendUp = com.example.toto_app.services.BackendHealthManager.get().isBackendUp();
+                    if (!backendUp) {
+                        sayViaWakeService("No puedo configurar la alarma ahora porque no hay conexión al servidor.", 0);
+                        stopSelf(); return;
+                    }
+                } catch (Throwable ignored) {
+                    // Si no podemos consultar, ser conservadores y denegar
+                    sayViaWakeService("No puedo configurar la alarma ahora porque no hay conexión al servidor.", 0);
                     stopSelf(); return;
                 }
                 DeviceActions.AlarmResult res = DeviceActions.setAlarm(this, hh, mm, "Toto");
@@ -707,6 +722,14 @@ public class InstructionService extends android.app.Service {
             case "UNKNOWN":
             default: {
                 if (FallSignals.isActive()) { stopSelf(); return; }
+                boolean backendUp = true;
+                try { backendUp = com.example.toto_app.services.BackendHealthManager.get().isBackendUp(); } catch (Throwable ignore) { backendUp = true; }
+                if (!backendUp) {
+                    // Cuando el backend está caído, evitamos decir "No estoy seguro" y ofrecemos intentar localmente
+                    String offlineReply = "No hay conexión al servidor. Puedo intentar ejecutar algunas acciones locales como configurar alarmas, iniciar llamadas o detectar caídas.";
+                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(offlineReply), 0);
+                    stopSelf(); return;
+                }
                 try {
                     AskRequest rq = new AskRequest();
                     rq.prompt = transcript;

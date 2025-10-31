@@ -53,6 +53,9 @@ public interface APIService {
     @GET("/api/spotify/status")
     Call<SpotifyStatus> spotifyStatus();
 
+    @GET("/health")
+    Call<com.google.gson.JsonObject> health();
+
     @POST("/api/spotify/play")
     Call<JsonObject> spotifyPlay(@Body Map<String, String> body);
 }
