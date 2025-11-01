@@ -49,7 +49,7 @@ public class InstructionService extends android.app.Service {
     private int fallRetry = 0;
 
     private static final String EMERGENCY_NAME   = "Tamara";
-    private static final String EMERGENCY_NUMBER = "+5491159753115";
+    private static final String EMERGENCY_NUMBER = "+5491158550932";
     private boolean fallOwner = false;
 
     @Override public void onCreate() { super.onCreate(); }
@@ -134,7 +134,7 @@ public class InstructionService extends android.app.Service {
                 } else {
                     int res = FallLogic.sendEmergencyMessageToResult(EMERGENCY_NUMBER, userName);
                     if (res == 0) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
-                    else if (res == 1) sayViaWakeService("No hay conexión. En cuanto vuelva, enviaré el mensaje de emergencia.", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
                     else sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
                     if (fallOwner) {
                         FallSignals.clear();
@@ -170,7 +170,7 @@ public class InstructionService extends android.app.Service {
                 } else {
                     int res = FallLogic.sendEmergencyMessageToResult(EMERGENCY_NUMBER, userName);
                     if (res == 0) sayViaWakeService("No te escuché. Ya avisé a " + EMERGENCY_NAME + ".", 0);
-                    else if (res == 1) sayViaWakeService("No hay conexión. En cuanto vuelva, enviaré el mensaje de emergencia.", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
                     else sayViaWakeService("No te escuché y no pude avisar a " + EMERGENCY_NAME + ".", 0);
                     if (fallOwner) {
                         FallSignals.clear();
@@ -189,7 +189,7 @@ public class InstructionService extends android.app.Service {
                 case HELP: {
                     int res = FallLogic.sendEmergencyMessageToResult(EMERGENCY_NUMBER, userName);
                     if (res == 0) sayViaWakeService("Ya avisé a " + EMERGENCY_NAME + ".", 0);
-                    else if (res == 1) sayViaWakeService("No hay conexión. En cuanto vuelva, enviaré el mensaje de emergencia.", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
                     else    sayViaWakeService("Quise avisar a " + EMERGENCY_NAME + " pero no pude enviar el mensaje.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
@@ -726,7 +726,7 @@ public class InstructionService extends android.app.Service {
                 try { backendUp = com.example.toto_app.services.BackendHealthManager.get().isBackendUp(); } catch (Throwable ignore) { backendUp = true; }
                 if (!backendUp) {
                     // Cuando el backend está caído, evitamos decir "No estoy seguro" y ofrecemos intentar localmente
-                    String offlineReply = "No hay conexión al servidor. Puedo intentar ejecutar algunas acciones locales como configurar alarmas, iniciar llamadas o detectar caídas.";
+                    String offlineReply = "No hay conexión al servidor. Volvé a intentar más tarde.";
                     sayViaWakeService(TtsSanitizer.sanitizeForTTS(offlineReply), 0);
                     stopSelf(); return;
                 }

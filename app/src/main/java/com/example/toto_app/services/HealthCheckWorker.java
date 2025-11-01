@@ -27,6 +27,7 @@ public class HealthCheckWorker extends Worker {
             boolean ok = com.example.toto_app.services.BackendHealthManager.performCheckStatic(getApplicationContext());
             if (ok) {
                 Log.i(TAG, "health check ok");
+                try { com.example.toto_app.services.BackendHealthManager.get().notifyRecovered(); } catch (Exception ignore) {}
                 return Result.success();
             }
         } catch (Throwable t) {
@@ -44,4 +45,3 @@ public class HealthCheckWorker extends Worker {
         WorkManager.getInstance(ctx).enqueue(req);
     }
 }
-

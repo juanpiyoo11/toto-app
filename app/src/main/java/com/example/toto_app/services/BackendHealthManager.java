@@ -113,6 +113,14 @@ public final class BackendHealthManager {
     }
 
     /**
+     * Called by external watchers (e.g. HealthCheckWorker) to notify the manager
+     * that the backend recovered. Will ensure instance is updated and flush pending.
+     */
+    public synchronized void notifyRecovered() {
+        setBackendUp(true);
+    }
+
+    /**
      * Marca fallo inmediato (p. ej. tras excepción en llamada). Esto actualiza el estado
      * y arranca el watcher si aún no está en DOWN.
      */

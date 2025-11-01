@@ -40,13 +40,25 @@ public final class PendingEmergencyStore {
                 NotificationService.simpleActionNotification(
                         AppContext.get(),
                         "Toto: Sin conexión",
-                        "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia..",
+                        "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.",
                         null);
-                // Pedimos a WakeWordService que hable (si está disponible)
-                android.content.Intent i = new android.content.Intent(AppContext.get(), com.example.toto_app.services.WakeWordService.class)
-                        .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
-                        .putExtra("text", "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.");
-                androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), i);
+                // Start WakeWordService ACTION_SAY with enqueue flag so it will speak now if idle or enqueue otherwise.
+                try {
+                    Log.d(TAG, "PendingEmergencyStore.add -> starting WakeWordService ACTION_SAY (enqueue)");
+                    android.content.Intent i = new android.content.Intent(AppContext.get(), com.example.toto_app.services.WakeWordService.class)
+                            .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
+                            .putExtra("text", "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.")
+                            .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
+                    androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), i);
+                } catch (Exception ignore) {
+                    // fallback: broadcast for older behavior
+                    try {
+                        Log.d(TAG, "PendingEmergencyStore.add -> startForegroundService failed, broadcasting ACTION_PENDING_SENT");
+                        android.content.Intent b = new android.content.Intent("com.example.toto_app.ACTION_PENDING_SENT");
+                        b.putExtra("text", "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.");
+                        AppContext.get().sendBroadcast(b);
+                    } catch (Exception ignore2) {}
+                }
             } catch (Exception ignore) {}
         }
     }
@@ -74,10 +86,23 @@ public final class PendingEmergencyStore {
                                     "Toto: Mensaje de emergencia enviado",
                                     "Se envió el mensaje de emergencia a " + itx.numberE164 + " al recuperar la conexión.",
                                     null);
-                            android.content.Intent i = new android.content.Intent(AppContext.get(), com.example.toto_app.services.WakeWordService.class)
-                                    .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
-                                    .putExtra("text", "Recuperé la conexión. Envié el mensaje de emergencia.");
-                            androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), i);
+                            // Ask WakeWordService to speak (enqueue if busy) the confirmation message.
+                            try {
+                                Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> starting WakeWordService ACTION_SAY (enqueue) for " + itx.numberE164);
+                                android.content.Intent say = new android.content.Intent(AppContext.get(), com.example.toto_app.services.WakeWordService.class)
+                                        .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
+                                        .putExtra("text", "Recuperé la conexión. Envié el mensaje de emergencia.")
+                                        .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
+                                androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), say);
+                            } catch (Exception ignore) {
+                                // fallback to broadcast
+                                try {
+                                    Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> startForegroundService failed, broadcasting ACTION_PENDING_SENT");
+                                    android.content.Intent b = new android.content.Intent("com.example.toto_app.ACTION_PENDING_SENT");
+                                    b.putExtra("text", "Recuperé la conexión. Envié el mensaje de emergencia.");
+                                    AppContext.get().sendBroadcast(b);
+                                } catch (Exception ignore2) {}
+                            }
                         } catch (Exception ignore) { }
                     }
                 } catch (Exception e) {

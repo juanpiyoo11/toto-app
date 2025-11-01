@@ -45,6 +45,9 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     public static final String ACTION_CMD_FINISHED  = "com.example.toto_app.ACTION_CMD_FINISHED";
     public static final String ACTION_SAY           = "com.example.toto_app.ACTION_SAY";
+    // If ACTION_SAY includes this extra (boolean=true), WakeWordService should enqueue the TTS
+    // if it's currently busy instead of forcing immediate speech.
+    public static final String EXTRA_ENQUEUE_IF_BUSY = "enqueue_if_busy";
 
     public static final String ACTION_PAUSE_LISTEN  = "com.example.toto_app.ACTION_PAUSE_LISTEN";
     public static final String ACTION_RESUME_LISTEN = "com.example.toto_app.ACTION_RESUME_LISTEN";
@@ -80,7 +83,10 @@ public class WakeWordService extends Service implements RecognitionListener {
     private volatile boolean ttsReady = false;
     private final Random rng = new Random();
 
+    // whether TTS is currently speaking
     private volatile boolean isSpeaking = false;
+    // queue for short pending TTS messages (e.g. "Recuperé la conexión...") that arrive while busy
+    private final java.util.Queue<String> pendingSentQueue = new java.util.ArrayDeque<>();
 
     private PowerManager.WakeLock wakeLock;
     @Nullable private AudioFocusRequest audioFocusRequest;
@@ -128,6 +134,24 @@ public class WakeWordService extends Service implements RecognitionListener {
         }
     };
 
+    // Fallback receiver: some code may broadcast ACTION_PENDING_SENT (legacy); handle it by enqueuing/speaking
+    private final BroadcastReceiver pendingSentReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            String txt = (intent != null) ? intent.getStringExtra("text") : null;
+            if (txt == null || txt.trim().isEmpty()) return;
+            Log.d(TAG, "pendingSentReceiver received text=" + txt);
+            try {
+                if (ttsReady && !isSpeaking && !FallSignals.isActive() && currentUtteranceKind == null) {
+                    Log.d(TAG, "pendingSentReceiver: speaking immediately");
+                    speakText(txt);
+                } else {
+                    Log.d(TAG, "pendingSentReceiver: enqueueing because busy/not ready");
+                    synchronized (pendingSentQueue) { pendingSentQueue.add(txt); }
+                }
+            } catch (Exception e) { Log.w(TAG, "pendingSentReceiver error", e); }
+        }
+    };
+
     private final BroadcastReceiver fallReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String src = intent.getStringExtra(FallSignals.EXTRA_SOURCE);
@@ -157,18 +181,14 @@ public class WakeWordService extends Service implements RecognitionListener {
         super.onCreate();
 
         IntentFilter filter = new IntentFilter(ACTION_CMD_FINISHED);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(cmdFinishedReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(cmdFinishedReceiver, filter);
-        }
+        // always register with explicit export flags to satisfy modern lint (RECEIVER_NOT_EXPORTED)
+        try { registerReceiver(cmdFinishedReceiver, filter, Context.RECEIVER_NOT_EXPORTED); } catch (Exception e) { registerReceiver(cmdFinishedReceiver, filter); }
 
         IntentFilter fFall = new IntentFilter(FallSignals.ACTION_FALL_DETECTED);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(fallReceiver, fFall, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(fallReceiver, fFall);
-        }
+        try { registerReceiver(fallReceiver, fFall, Context.RECEIVER_NOT_EXPORTED); } catch (Exception e) { registerReceiver(fallReceiver, fFall); }
+
+        IntentFilter fPending = new IntentFilter("com.example.toto_app.ACTION_PENDING_SENT");
+        try { registerReceiver(pendingSentReceiver, fPending, Context.RECEIVER_NOT_EXPORTED); } catch (Exception e) { registerReceiver(pendingSentReceiver, fPending); }
 
         createChannel();
         updateForegroundNotification("Escuchando \"Toto\"");
@@ -221,17 +241,35 @@ public class WakeWordService extends Service implements RecognitionListener {
 
                 tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                     @Override public void onStart(String utteranceId) {
+                        Log.d(TAG, "TTS onStart utteranceId=" + utteranceId);
                         if (utteranceId != null && (utteranceId.startsWith("toto_ack_") || utteranceId.startsWith("toto_say_"))) {
                             isSpeaking = true;
                             requestTtsAudioFocus();
                         }
                     }
                     @Override public void onDone(String utteranceId) {
+                        Log.d(TAG, "TTS onDone utteranceId=" + utteranceId);
                         new android.os.Handler(getMainLooper()).post(() -> {
                             finishAfterTts(/*kind=*/currentUtteranceKind);
                         });
                     }
                     @Override public void onError(String utteranceId) { onDone(utteranceId); }
+                });
+                // If there are pending queued messages that couldn't be spoken because TTS
+                // wasn't yet ready, speak one now (service may be idle after creation).
+                new android.os.Handler(getMainLooper()).post(() -> {
+                    try {
+                        String pending = null;
+                        synchronized (pendingSentQueue) { pending = pendingSentQueue.poll(); }
+                        if (pending != null && !isSpeaking && !FallSignals.isActive() && currentUtteranceKind == null) {
+                            Log.d(TAG, "initTTS: speaking queued pending-sent TTS after TTS init: " + pending);
+                            speakText(pending);
+                        } else if (pending != null) {
+                            // put it back if we couldn't speak now
+                            synchronized (pendingSentQueue) { pendingSentQueue.add(pending); }
+                            Log.d(TAG, "initTTS: queued pending-sent kept because busy");
+                        }
+                    } catch (Exception e) { Log.w(TAG, "initTTS pending speak error", e); }
                 });
             } else {
                 ttsReady = false;
@@ -259,6 +297,14 @@ public class WakeWordService extends Service implements RecognitionListener {
             acquireWakeLock();
             Log.d(TAG, "Wake listening iniciado");
             updateForegroundNotification("Escuchando \"Toto\"");
+            // If there are queued pending TTS messages, speak the next one now (service is idle after starting)
+            String next = null;
+            synchronized (pendingSentQueue) { next = pendingSentQueue.poll(); }
+            if (next != null && ttsReady && !FallSignals.isActive() && currentUtteranceKind == null) {
+                Log.d(TAG, "startWakeListening: speaking queued pending-sent TTS");
+                speakText(next);
+                return;
+            }
         } catch (Exception e) {
             Log.e(TAG, "startWakeListening error", e);
             stopSelf();
@@ -322,6 +368,8 @@ public class WakeWordService extends Service implements RecognitionListener {
 
             if (ACTION_SAY.equals(action)) {
                 String toSay = intent.getStringExtra("text");
+                boolean enqueueIfBusy = intent.getBooleanExtra(EXTRA_ENQUEUE_IF_BUSY, false);
+                Log.d(TAG, "ACTION_SAY received -> text=" + toSay + " enqueueIfBusy=" + enqueueIfBusy);
                 boolean chain = intent.getBooleanExtra(EXTRA_AFTER_SAY_START_SERVICE, false);
                 if (chain) {
                     Intent next = new Intent(this, InstructionService.class);
@@ -335,7 +383,19 @@ public class WakeWordService extends Service implements RecognitionListener {
                 }
 
                 if (toSay != null && !toSay.trim().isEmpty()) {
-                    speakText(toSay.trim());
+                    if (enqueueIfBusy) {
+                        // enqueue if busy or TTS not ready
+                        if (ttsReady && !isSpeaking && !FallSignals.isActive() && currentUtteranceKind == null) {
+                            Log.d(TAG, "ACTION_SAY: speaking immediately");
+                            speakText(toSay.trim());
+                        } else {
+                            Log.d(TAG, "ACTION_SAY: enqueuing message");
+                            synchronized (pendingSentQueue) { pendingSentQueue.add(toSay.trim()); }
+                        }
+                    } else {
+                        Log.d(TAG, "ACTION_SAY: forced speak");
+                        speakText(toSay.trim());
+                    }
                 }
                 return START_NOT_STICKY;
             }
@@ -392,6 +452,7 @@ public class WakeWordService extends Service implements RecognitionListener {
         super.onDestroy();
         try { unregisterReceiver(cmdFinishedReceiver); } catch (Exception ignored) {}
         try { unregisterReceiver(fallReceiver); } catch (Exception ignored) {}
+        try { unregisterReceiver(pendingSentReceiver); } catch (Exception ignored) {}
         stopListening();
         if (model != null) { model.close(); model = null; }
         if (tts != null) { try { tts.stop(); } catch (Exception ignored) {} tts.shutdown(); tts = null; }
@@ -538,6 +599,14 @@ public class WakeWordService extends Service implements RecognitionListener {
         if (pendingAfterSay != null) {
             try { startService(pendingAfterSay); } catch (Exception ignored) {}
             pendingAfterSay = null;
+            return;
+        }
+        // If there are queued pending-sent TTS messages, speak them now (one by one)
+        String next = null;
+        synchronized (pendingSentQueue) { next = pendingSentQueue.poll(); }
+        if (next != null && ttsReady && !FallSignals.isActive()) {
+            // speak the queued message and return; finishAfterTts will be called again after it
+            speakText(next);
             return;
         }
         triggered = false;
