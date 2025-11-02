@@ -66,4 +66,7 @@ dependencies {
     // yamnet
     implementation "org.tensorflow:tensorflow-lite-task-audio:0.4.4"
     implementation "org.tensorflow:tensorflow-lite-support:0.4.4"
+
+    // WorkManager para reintentos de health check
+    implementation "androidx.work:work-runtime:2.8.1"
 }

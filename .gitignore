@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# GitHub Copilot internal files (no commitear)
+/.idea/copilot*.xml
+/.idea/copilotDiffState.xml

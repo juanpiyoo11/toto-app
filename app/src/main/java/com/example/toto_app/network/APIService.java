@@ -32,19 +32,13 @@ public interface APIService {
     @POST("api/whatsapp/send")
     Call<WhatsAppSendResponse> waSend(@Body WhatsAppSendRequest req);
 
-    @POST("/api/spotify/play")
-    retrofit2.Call<SpotifyResponse> spotifyPlay(@Body SpotifyPlayRequest body);
-
     @POST("/api/spotify/pause")
     retrofit2.Call<SpotifyResponse> spotifyPause();
-
-    @POST("/api/spotify/resume")
-    retrofit2.Call<SpotifyResponse> spotifyResume();
 
     @POST("/api/spotify/next")
     retrofit2.Call<SpotifyResponse> spotifyNext();
 
-    @POST("/api/spotify/prev")
+    @POST("/api/spotify/previous")
     retrofit2.Call<SpotifyResponse> spotifyPrev();
 
     @POST("/api/spotify/volume")
@@ -59,8 +53,8 @@ public interface APIService {
     @GET("/api/spotify/status")
     Call<SpotifyStatus> spotifyStatus();
 
-    @GET("/api/spotify/login-url")
-    Call<Map<String, String>> spotifyLoginUrl();
+    @GET("/health")
+    Call<com.google.gson.JsonObject> health();
 
     @POST("/api/spotify/play")
     Call<JsonObject> spotifyPlay(@Body Map<String, String> body);

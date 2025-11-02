@@ -18,7 +18,6 @@ import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
-import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.falls.STFT;
 
 import org.tensorflow.lite.support.audio.TensorAudio;
@@ -291,11 +290,28 @@ public class FallDetectionService extends Service {
                 );
 
                 if (isFall) {
-                    Intent i = new Intent(FallSignals.ACTION_FALL_DETECTED)
-                            .setPackage(getPackageName())
-                            .putExtra(FallSignals.EXTRA_SOURCE, "yamnet_audio");
-                    sendBroadcast(i);
-                    SystemClock.sleep(1200); // cooldown
+                    if (!com.example.toto_app.falls.FallSignals.tryActivate()) {
+                        // ignorado, ya hay una caída en curso o cooldown
+                    } else {
+                        android.content.Context ctx = this;
+                        android.content.Intent stopTts = new android.content.Intent(ctx, com.example.toto_app.services.WakeWordService.class)
+                                .setAction(com.example.toto_app.services.WakeWordService.ACTION_STOP_TTS);
+                        androidx.core.content.ContextCompat.startForegroundService(ctx, stopTts);
+
+                        android.content.Intent pause = new android.content.Intent(ctx, com.example.toto_app.services.WakeWordService.class)
+                                .setAction(com.example.toto_app.services.WakeWordService.ACTION_PAUSE_LISTEN);
+                        androidx.core.content.ContextCompat.startForegroundService(ctx, pause);
+
+                        android.content.Intent say = new android.content.Intent(ctx, com.example.toto_app.services.WakeWordService.class)
+                                .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
+                                .putExtra("text", "Escuché un golpe. ¿Estás bien?")
+                                .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true)
+                                .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_AFTER_SAY_USER_NAME, "Juan")
+                                .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_AFTER_SAY_FALL_MODE, "AWAIT:0");
+                        androidx.core.content.ContextCompat.startForegroundService(ctx, say);
+                    }
+
+                    SystemClock.sleep(1200); // cooldown local corto sólo para logs/flujo
                 }
 
                 // deslizamiento 50%

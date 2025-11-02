@@ -192,21 +192,31 @@ public final class QuickTimeParser {
             }
         }
 
-        // 5) “a las 7”, “once de la noche”
+        // 5) “a las 7”, “once de la noche” — prefer last valid match so we don't pick 'una' from 'una alarma'
         Matcher onlyH = Pattern.compile("\\b(?:a\\s+las|para\\s+las)?\\s*(\\d{1,2})\\b").matcher(text);
-        if (onlyH.find()) {
+        Integer lastH = null; int lastM = 0;
+        while (onlyH.find()) {
+            int start = onlyH.start(1);
+            int end = onlyH.end(1);
+            if (isAdjacentToAlarm(text, start, end)) continue;
             int h = clamp(Integer.parseInt(onlyH.group(1)), 0, 23);
-            int m = 0;
             h = applyAmPm(h, text);
-            return new Absolute(h, m);
+            lastH = h; lastM = 0;
         }
+        if (lastH != null) return new Absolute(lastH, lastM);
+
         Matcher onlyHWord = Pattern.compile("\\b(?:a\\s+las|para\\s+las)?\\s*(" + HORA_WORD_RE + ")\\b").matcher(text);
-        if (onlyHWord.find()) {
+        Integer lastHw = null;
+        while (onlyHWord.find()) {
+            int start = onlyHWord.start(1);
+            int end = onlyHWord.end(1);
+            if (isAdjacentToAlarm(text, start, end)) continue;
             Integer h = wordToInt(onlyHWord.group(1));
-            if (h != null) {
-                h = applyAmPm(h, text);
-                return new Absolute(h, 0);
-            }
+            if (h != null) lastHw = h;
+        }
+        if (lastHw != null) {
+            int hh = applyAmPm(lastHw, text);
+            return new Absolute(hh, 0);
         }
 
         return null;
@@ -235,5 +245,26 @@ public final class QuickTimeParser {
     private static int parseIntSafe(String s, int def) {
         if (s == null) return def;
         try { return Integer.parseInt(s); } catch (Exception ignored) { return def; }
+    }
+
+    private static boolean isAdjacentToAlarm(String text, int start, int end) {
+        // check previous word
+        String before = null; String after = null;
+        int i = start - 1;
+        while (i >= 0 && Character.isWhitespace(text.charAt(i))) i--;
+        int j = i;
+        while (j >= 0 && !Character.isWhitespace(text.charAt(j))) j--;
+        if (i >= 0 && j < i) before = text.substring(j+1, i+1);
+
+        // next word
+        int k = end;
+        while (k < text.length() && Character.isWhitespace(text.charAt(k))) k++;
+        int l = k;
+        while (l < text.length() && !Character.isWhitespace(text.charAt(l))) l++;
+        if (k < text.length() && l > k) after = text.substring(k, l);
+
+        if (before != null && before.equals("alarma")) return true;
+        if (after != null && after.equals("alarma")) return true;
+        return false;
     }
 }
