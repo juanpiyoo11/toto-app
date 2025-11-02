@@ -5,6 +5,7 @@ import android.util.Log;
 import com.example.toto_app.network.WhatsAppSendRequest;
 import com.example.toto_app.network.WhatsAppSendResponse;
 import com.example.toto_app.network.RetrofitClient;
+import com.example.toto_app.services.PendingEmergencyStore;
 
 import java.text.Normalizer;
 import java.util.Locale;
@@ -28,8 +29,13 @@ public final class FallLogic {
     public static boolean saysHelp(String norm) {
         return norm.contains(" no estoy bien ")
                 || norm.contains(" no esta bien ")
+                || norm.contains(" me caí ")
+                || norm.contains(" me he caído ")
                 || norm.contains(" estoy mal ")
                 || norm.contains(" me duele ")
+                || norm.contains(" duele ")
+                || norm.contains(" dolor ")
+                || norm.contains(" dolió ")
                 || norm.contains(" me lastime ") || norm.contains(" me lastimé ")
                 || norm.contains(" no me puedo mover ")
                 || norm.contains(" no puedo levantarme ") || norm.contains(" no puedo pararme ")
@@ -39,12 +45,48 @@ public final class FallLogic {
     }
 
     public static boolean mentionsFall(String norm) {
-        return norm.contains(" me cai ") || norm.contains(" me caí ")
+        // expanded forms: handle variations like "cae", "cayo", "resbalé" and also fuzzy matches
+        if (norm.contains(" me cai ") || norm.contains(" me ca\u00ed ")
                 || norm.contains(" me caigo ") || norm.contains(" me estoy cayendo ")
-                || norm.contains(" caida ") || norm.contains(" caída ")
-                || norm.contains(" me tropece ") || norm.contains(" me tropecé ")
-                || norm.contains(" me pegue ") || norm.contains(" me pegué ")
-                || norm.contains(" me desmaye ") || norm.contains(" me desmayé ");
+                || norm.contains(" caida ") || norm.contains(" ca\u00edda ")
+                || norm.contains(" me tropece ") || norm.contains(" me tropec\u00e9 ")
+                || norm.contains(" me pegue ") || norm.contains(" me pegu\u00e9 ")
+                || norm.contains(" me desmaye ") || norm.contains(" me desmay\u00e9 ")) return true;
+
+        // verbs and stems
+        if (norm.contains(" cae ") || norm.contains(" cayo ") || norm.contains(" caigo ")) return true;
+        if (norm.contains(" resbale ") || norm.contains(" resbal\u00e9 ") || norm.contains(" resbal\u00f3 ") || norm.contains(" resbalo ")) return true;
+
+        // fuzzy token-level check for common misspellings near "cai"/"cae"
+        String s = norm.trim();
+        String[] toks = s.split("\\s+");
+        for (String t : toks) {
+            String tt = t.replaceAll("[^a-zA-Z0-9]", "");
+            if (approxEqual(tt, "cai", 1) || approxEqual(tt, "cayo", 1) || approxEqual(tt, "cae", 1)) return true;
+        }
+        return false;
+    }
+
+    private static boolean approxEqual(String a, String b, int maxDist) {
+        if (a == null || b == null) return false;
+        int d = levenshtein(a, b);
+        return d <= maxDist;
+    }
+
+    // simple Levenshtein
+    private static int levenshtein(String a, String b) {
+        int[] costs = new int[b.length() + 1];
+        for (int j = 0; j < costs.length; j++) costs[j] = j;
+        for (int i = 1; i <= a.length(); i++) {
+            costs[0] = i;
+            int nw = i - 1;
+            for (int j = 1; j <= b.length(); j++) {
+                int cj = Math.min(1 + Math.min(costs[j], costs[j - 1]), a.charAt(i - 1) == b.charAt(j - 1) ? nw : nw + 1);
+                nw = costs[j];
+                costs[j] = cj;
+            }
+        }
+        return costs[b.length()];
     }
 
     private static boolean saysOk(String norm) {
@@ -114,7 +156,42 @@ public final class FallLogic {
                     || (wbody.id != null && !wbody.id.trim().isEmpty()));
         } catch (Exception ex) {
             Log.e("FallLogic", "Error enviando WhatsApp a emergencia", ex);
+            // Si falló, encolar para reintentar cuando el backend vuelva
+            try {
+                PendingEmergencyStore.get().add(numberE164, userName);
+            } catch (Exception e2) { Log.e("FallLogic", "No se pudo encolar emergencia", e2); }
+            try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
             return false;
+        }
+    }
+
+    /**
+     * Result codes: 0=sent, 1=queued (backend down), 2=failed
+     */
+    public static int sendEmergencyMessageToResult(String numberE164, String userName) {
+        try {
+            String to = numberE164.replaceAll("[^0-9+]", "");
+            String msg = buildEmergencyText(userName);
+            WhatsAppSendRequest wreq = new WhatsAppSendRequest(to, msg, Boolean.FALSE);
+            retrofit2.Response<WhatsAppSendResponse> wresp = RetrofitClient.api().waSend(wreq).execute();
+            WhatsAppSendResponse wbody = wresp.body();
+            boolean ok = wresp.isSuccessful()
+                    && wbody != null
+                    && ("ok".equalsIgnoreCase(wbody.status)
+                    || "ok_template".equalsIgnoreCase(wbody.status)
+                    || (wbody.id != null && !wbody.id.trim().isEmpty()));
+            if (ok) return 0;
+            // si la respuesta no fue ok consideramos que hay algún problema de backend (queue)
+            PendingEmergencyStore.get().add(numberE164, userName);
+            try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
+            return 1;
+        } catch (Exception ex) {
+            Log.e("FallLogic", "Error enviando WhatsApp a emergencia", ex);
+            try {
+                PendingEmergencyStore.get().add(numberE164, userName);
+            } catch (Exception e2) { Log.e("FallLogic", "No se pudo encolar emergencia", e2); }
+            try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
+            return 1;
         }
     }
 }
