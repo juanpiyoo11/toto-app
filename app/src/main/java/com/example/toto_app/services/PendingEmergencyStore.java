@@ -35,30 +35,15 @@ public final class PendingEmergencyStore {
         synchronized (lock) {
             list.add(new Item(numberE164, userName, System.currentTimeMillis()));
             Log.i(TAG, "Queued emergency for " + numberE164);
-            // notificar al usuario inmediatamente (notificación + TTS)
+            // Notificar al usuario SOLO con notificación (sin TTS para evitar duplicación)
+            // El TTS lo maneja InstructionService que tiene el contexto completo
             try {
                 NotificationService.simpleActionNotification(
                         AppContext.get(),
                         "Toto: Sin conexión",
                         "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.",
                         null);
-                // Start WakeWordService ACTION_SAY with enqueue flag so it will speak now if idle or enqueue otherwise.
-                try {
-                    Log.d(TAG, "PendingEmergencyStore.add -> starting WakeWordService ACTION_SAY (enqueue)");
-                    android.content.Intent i = new android.content.Intent(AppContext.get(), com.example.toto_app.services.WakeWordService.class)
-                            .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
-                            .putExtra("text", "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.")
-                            .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
-                    androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), i);
-                } catch (Exception ignore) {
-                    // fallback: broadcast for older behavior
-                    try {
-                        Log.d(TAG, "PendingEmergencyStore.add -> startForegroundService failed, broadcasting ACTION_PENDING_SENT");
-                        android.content.Intent b = new android.content.Intent("com.example.toto_app.ACTION_PENDING_SENT");
-                        b.putExtra("text", "No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.");
-                        AppContext.get().sendBroadcast(b);
-                    } catch (Exception ignore2) {}
-                }
+                Log.d(TAG, "Emergency queued silently (TTS handled by caller)");
             } catch (Exception ignore) {}
         }
     }

@@ -272,7 +272,7 @@ public class WakeWordService extends Service implements RecognitionListener {
                         if (utteranceId != null && (utteranceId.startsWith("toto_ack_") || utteranceId.startsWith("toto_say_"))) {
                             isSpeaking = true;
                             // mientras el TTS está hablando, bloqueamos detección de wake por seguridad adicional
-                            blockWakeUntilMs = SystemClock.elapsedRealtime() + 10_000; // se ajustará al finalizar
+                            blockWakeUntilMs = SystemClock.elapsedRealtime() + 3_000; // se ajustará al finalizar
                             requestTtsAudioFocus();
                         }
                     }

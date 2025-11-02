@@ -56,7 +56,7 @@ public class InstructionService extends android.app.Service {
     private int fallRetry = 0;
 
     private static final String EMERGENCY_NAME   = "Tamara";
-    private static final String EMERGENCY_NUMBER = "+5491158550932";
+    private static final String EMERGENCY_NUMBER = "+5491159753115";
     private boolean fallOwner = false;
 
     @Override public void onCreate() { super.onCreate(); }
@@ -273,12 +273,9 @@ public class InstructionService extends android.app.Service {
             return;
         }
 
-        String normAll = FallLogic.normEs(transcript);
-        if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
-            sayThenListenHere("¿Estás bien?", "AWAIT:0");
-            stopSelf();
-            return;
-        }
+        // NOTA: No chequeamos saysHelp() aquí porque puede dar falsos positivos
+        // con preguntas hipotéticas como "Si alguien me pide ayuda, ¿qué hago?"
+        // En su lugar, lo usamos como fallback en case "UNKNOWN" después del NLU.
 
         try {
             String norm = java.text.Normalizer.normalize(transcript, java.text.Normalizer.Form.NFD)
@@ -837,6 +834,26 @@ public class InstructionService extends android.app.Service {
             case "UNKNOWN":
             default: {
                 if (FallSignals.isActive()) { stopSelf(); return; }
+                
+                // Fallback safety net: SOLO si el backend NLU falló completamente
+                // (nres == null O confidence == 0.0 indica fallo de comunicación con backend)
+                // entonces chequeamos localmente palabras de emergencia como última red de seguridad.
+                // Si el backend SÍ respondió correctamente (confidence > 0), confiamos en su decisión.
+                boolean backendFailed = (nres == null || nres.confidence == 0.0);
+                if (backendFailed) {
+                    String normAll = FallLogic.normEs(transcript);
+                    if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
+                        Log.d(TAG, "Fallback: backend failed + saysHelp/mentionsFall → activating FALL flow");
+                        if (!FallSignals.isActive()) {
+                            FallSignals.tryActivate();
+                            fallOwner = true;
+                        }
+                        sayThenListenHere("¿Estás bien?", "AWAIT:0");
+                        stopSelf(); 
+                        return;
+                    }
+                }
+                
                 boolean backendUp = true;
                 try { backendUp = com.example.toto_app.services.BackendHealthManager.get().isBackendUp(); } catch (Throwable ignore) { backendUp = true; }
                 if (!backendUp) {
@@ -848,6 +865,7 @@ public class InstructionService extends android.app.Service {
                 try {
                     AskRequest rq = new AskRequest();
                     rq.prompt = transcript;
+                    rq.userId = userName;  // Enviar el nombre del usuario para memoria de conversación
                     Response<AskResponse> r2 = RetrofitClient.api().ask(rq).execute();
                     String reply = (r2.isSuccessful() && r2.body() != null && r2.body().reply != null)
                             ? r2.body().reply.trim()

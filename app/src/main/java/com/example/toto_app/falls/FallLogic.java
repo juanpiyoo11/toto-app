@@ -29,8 +29,13 @@ public final class FallLogic {
     public static boolean saysHelp(String norm) {
         return norm.contains(" no estoy bien ")
                 || norm.contains(" no esta bien ")
+                || norm.contains(" me caí ")
+                || norm.contains(" me he caído ")
                 || norm.contains(" estoy mal ")
                 || norm.contains(" me duele ")
+                || norm.contains(" duele ")
+                || norm.contains(" dolor ")
+                || norm.contains(" dolió ")
                 || norm.contains(" me lastime ") || norm.contains(" me lastimé ")
                 || norm.contains(" no me puedo mover ")
                 || norm.contains(" no puedo levantarme ") || norm.contains(" no puedo pararme ")
