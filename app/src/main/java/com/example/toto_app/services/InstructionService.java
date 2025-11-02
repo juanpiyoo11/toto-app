@@ -30,8 +30,10 @@ import com.example.toto_app.util.TtsSanitizer;
 import java.io.File;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.Executors;
@@ -42,9 +44,14 @@ public class InstructionService extends android.app.Service {
 
     private static final String TAG = "InstructionService";
 
+    // Bandera global simple para saber si hay conversación activa (grabación/STT/NLU en curso)
+    private static volatile boolean sConversationActive = false;
+    public static boolean isConversationActive() { return sConversationActive; }
+
     private String userName = "Juan";
 
     private static final String EXTRA_FALL_MODE = "fall_mode";
+    private boolean confirmWhatsApp = false;
     @Nullable private String fallMode = null;
     private int fallRetry = 0;
 
@@ -56,6 +63,9 @@ public class InstructionService extends android.app.Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // marca conversación activa mientras este servicio esté vivo
+        sConversationActive = true;
+
         if (intent != null) {
             if (intent.hasExtra("user_name")) {
                 String incoming = intent.getStringExtra("user_name");
@@ -72,15 +82,22 @@ public class InstructionService extends android.app.Service {
                     }
                 }
             }
+            if (intent.hasExtra("confirm_whatsapp")) {
+                confirmWhatsApp = intent.getBooleanExtra("confirm_whatsapp", false);
+            }
         }
 
-        if (fallMode != null) {
+        // If this is a WhatsApp confirm flow, we don't activate fall signals; otherwise keep existing behavior
+        if (fallMode != null && !confirmWhatsApp) {
             if (!FallSignals.isActive()) {
                 FallSignals.tryActivate();
             }
             fallOwner = true;
+        } else if (fallMode != null && confirmWhatsApp) {
+            // confirm flow: don't touch FallSignals, but mark owner=false
+            fallOwner = false;
         } else {
-            if (FallSignals.isActive()) {
+            if (FallSignals.isActive() && !confirmWhatsApp) {
                 stopSelf();
                 return START_NOT_STICKY;
             }
@@ -148,6 +165,22 @@ public class InstructionService extends android.app.Service {
                 stopSelf();
                 return;
             } else {
+                // If this was a WhatsApp confirm flow, treat lack of voice as negative/absence
+                if (confirmWhatsApp) {
+                    IncomingMessageStore.get().clear();
+                    try {
+                        Intent handled = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_WHATSAPP_HANDLED);
+                        androidx.core.content.ContextCompat.startForegroundService(this, handled);
+                    } catch (Exception ignored) {}
+                    try {
+                        Intent resume = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                        androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                    } catch (Exception ignored) {}
+                    try { wav.delete(); } catch (Exception ignore) {}
+                    stopSelf();
+                    return;
+                }
+
                 sayViaWakeService("No te escuché bien.", 0);
                 try { wav.delete(); } catch (Exception ignore) {}
                 stopSelf();
@@ -220,6 +253,21 @@ public class InstructionService extends android.app.Service {
         }
 
         if (transcript.isEmpty()) {
+            // For WhatsApp confirm flows, treat empty transcript as absence -> clear and re-arm
+            if (confirmWhatsApp) {
+                IncomingMessageStore.get().clear();
+                try {
+                    Intent handled = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_WHATSAPP_HANDLED);
+                    androidx.core.content.ContextCompat.startForegroundService(this, handled);
+                } catch (Exception ignored) {}
+                try {
+                    Intent resume = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                    androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                } catch (Exception ignored) {}
+                stopSelf();
+                return;
+            }
+
             sayViaWakeService("No te escuché bien.", 0);
             stopSelf();
             return;
@@ -254,13 +302,80 @@ public class InstructionService extends android.app.Service {
             boolean fresh = IncomingMessageStore.get().hasFresh(FRESH_MS);
 
             if (fresh && ((IncomingMessageStore.get().isAwaitingConfirm() && saysAffirm) || saysRead)) {
-                IncomingMessageStore.Msg m = IncomingMessageStore.get().consume();
+                IncomingMessageStore.Msg m = IncomingMessageStore.get().peek();
                 if (m != null) {
-                    String tts = (m.from == null ? "alguien" : m.from) + " dice: " + (m.body == null ? "…" : m.body);
+                    String who = (m.from == null ? "alguien" : m.from);
+                    // Por defecto, límite de cuántos leer ahora. Elegimos 5 para no ser engorroso.
+                    final int READ_LIMIT = 5;
+                    String tts;
+                    List<String> toMark = null;
+
+                    if (m.parts != null && !m.parts.isEmpty()) {
+                        // filtrar los que aún no se leyeron y tomar los últimos hasta READ_LIMIT
+                        List<String> freshParts = IncomingMessageStore.get().filterNewParts(who, m.parts, READ_LIMIT);
+                        if (!freshParts.isEmpty()) {
+                            toMark = new ArrayList<>(freshParts);
+                            // Construir TTS: "Nombre dice: msg1. msg2. msg3"
+                            StringBuilder sb = new StringBuilder();
+                            sb.append(who).append(" dice: ");
+                            for (int i = 0; i < freshParts.size(); i++) {
+                                if (i > 0) sb.append(". ");
+                                sb.append(freshParts.get(i));
+                            }
+                            tts = sb.toString();
+                        } else {
+                            // No hay partes nuevas -> caer a body completo (compat) una vez
+                            tts = who + " dice: " + (m.body == null ? "…" : m.body);
+                        }
+                    } else {
+                        // Sin partes, usar cuerpo plano
+                        tts = who + " dice: " + (m.body == null ? "…" : m.body);
+                    }
+
+                    // Consumimos el store (para cerrar flujo de confirmación) antes de hablar
+                    IncomingMessageStore.get().consume();
+                    // Marcar como leídas las partes efectivamente leídas
+                    if (toMark != null && !toMark.isEmpty()) {
+                        IncomingMessageStore.get().markSpoken(who, toMark);
+                    }
+
+                    // Notify WakeWordService that WhatsApp confirm has been handled (clear pending flag)
+                    try {
+                        Intent handled = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_WHATSAPP_HANDLED);
+                        androidx.core.content.ContextCompat.startForegroundService(this, handled);
+                    } catch (Exception ignored) {}
+
                     sayViaWakeService(tts, 0);
+
+                    // After reading, re-arm wake listening
+                    try {
+                        Intent resume = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                        androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                    } catch (Exception ignored) {}
+
                     stopSelf();
                     return;
                 }
+            }
+
+            // If this is a WhatsApp confirm flow and we reached here without reading,
+            // treat it as a 'no' / absence of response: clear the pending incoming and notify service
+            if (confirmWhatsApp && IncomingMessageStore.get().isAwaitingConfirm() && !saysAffirm && !saysRead) {
+                // clear stored incoming (do not read)
+                IncomingMessageStore.get().clear();
+                try {
+                    Intent handled = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_WHATSAPP_HANDLED);
+                    androidx.core.content.ContextCompat.startForegroundService(this, handled);
+                } catch (Exception ignored) {}
+
+                // re-arm wake listening so Toto continues normal operation
+                try {
+                    Intent resume = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_RESUME_LISTEN);
+                    androidx.core.content.ContextCompat.startForegroundService(this, resume);
+                } catch (Exception ignored) {}
+
+                stopSelf();
+                return;
             }
         } catch (Throwable ignored) {}
 
@@ -809,7 +924,10 @@ public class InstructionService extends android.app.Service {
     }
 
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { super.onDestroy(); }
+    @Override public void onDestroy() {
+        super.onDestroy();
+        sConversationActive = false;
+    }
 
     @Nullable
     private static int[] tryParseIsoToLocalHourMinute(String iso) {

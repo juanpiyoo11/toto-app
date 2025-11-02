@@ -1,7 +1,9 @@
 package com.example.toto_app;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.app.role.RoleManager;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -9,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.service.notification.NotificationListenerService;
 import android.widget.Button;
 import android.widget.Toast;
 
@@ -91,6 +94,17 @@ public class MainActivity extends AppCompatActivity {
             startService(i);
         });
 
+        Button btnNotif = findViewById(R.id.btnNotifAccess);
+        btnNotif.setOnClickListener(v -> {
+            // Open notification listener settings
+            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+        });
+
+        // On startup, if Notification Listener not enabled, show a runtime-like popup to guide user
+        if (!isNotificationListenerEnabled()) {
+            showNotificationAccessPopup();
+        }
+
         // Pide permisos base y arranca Toto
         requestNeededPermissionsAndStart();
 
@@ -98,6 +112,15 @@ public class MainActivity extends AppCompatActivity {
         if (getIntent() != null && getIntent().getBooleanExtra("request_contacts_perm", false)) {
             requestContactsIfNeeded();
         }
+    }
+
+    private void showNotificationAccessPopup() {
+        new AlertDialog.Builder(this)
+                .setTitle("Habilitar notificaciones")
+                .setMessage("Para que Toto pueda detectar mensajes entrantes de WhatsApp, concedé acceso a notificaciones. Tocá Abrir configuración y activá Toto.")
+                .setPositiveButton("Abrir configuración", (d, w) -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)))
+                .setNegativeButton("Ahora no", null)
+                .show();
     }
 
     @Override
@@ -236,5 +259,12 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Sin permiso de contactos no puedo buscar por nombre.", Toast.LENGTH_LONG).show();
             }
         }
+    }
+
+    private boolean isNotificationListenerEnabled() {
+        String pkg = getPackageName();
+        String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+        if (flat == null || flat.isEmpty()) return false;
+        return flat.contains(pkg);
     }
 }

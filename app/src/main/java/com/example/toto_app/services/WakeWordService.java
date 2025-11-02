@@ -23,6 +23,7 @@ import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import org.json.JSONObject;
 import org.vosk.LibVosk;
@@ -43,34 +44,45 @@ import com.example.toto_app.util.TtsSanitizer;
 
 public class WakeWordService extends Service implements RecognitionListener {
 
-    public static final String ACTION_CMD_FINISHED  = "com.example.toto_app.ACTION_CMD_FINISHED";
-    public static final String ACTION_SAY           = "com.example.toto_app.ACTION_SAY";
+    public static final String ACTION_CMD_FINISHED = "com.example.toto_app.ACTION_CMD_FINISHED";
+    public static final String ACTION_SAY = "com.example.toto_app.ACTION_SAY";
+    public static final String ACTION_WHATSAPP_HANDLED = "com.example.toto_app.ACTION_WHATSAPP_HANDLED";
     // If ACTION_SAY includes this extra (boolean=true), WakeWordService should enqueue the TTS
     // if it's currently busy instead of forcing immediate speech.
     public static final String EXTRA_ENQUEUE_IF_BUSY = "enqueue_if_busy";
 
-    public static final String ACTION_PAUSE_LISTEN  = "com.example.toto_app.ACTION_PAUSE_LISTEN";
+    public static final String ACTION_PAUSE_LISTEN = "com.example.toto_app.ACTION_PAUSE_LISTEN";
     public static final String ACTION_RESUME_LISTEN = "com.example.toto_app.ACTION_RESUME_LISTEN";
 
-    public static final String ACTION_STOP_TTS      = "com.example.toto_app.ACTION_STOP_TTS";
+    public static final String ACTION_STOP_TTS = "com.example.toto_app.ACTION_STOP_TTS";
 
     public static final String EXTRA_AFTER_SAY_START_SERVICE = "after_say_start_service";
-    public static final String EXTRA_AFTER_SAY_USER_NAME     = "after_say_user_name";
-    public static final String EXTRA_AFTER_SAY_FALL_MODE     = "after_say_fall_mode";
+    public static final String EXTRA_AFTER_SAY_USER_NAME = "after_say_user_name";
+    public static final String EXTRA_AFTER_SAY_FALL_MODE = "after_say_fall_mode";
+    public static final String EXTRA_AFTER_SAY_CONFIRM_WHATSAPP = "after_say_confirm_whatsapp";
 
-    public static final String EXTRA_REASON         = "reason";
-    public static final String REASON_FALL_CLEAR    = "FALL_CLEAR";
+    public static final String EXTRA_REASON = "reason";
+    public static final String REASON_FALL_CLEAR = "FALL_CLEAR";
 
-    @Nullable private Intent pendingAfterSay;
+    // Pending WhatsApp confirmation prompt handling
+    private volatile boolean pendingWhatsAppConfirm = false;
+    @Nullable
+    private volatile String pendingWhatsAppText = null;
+    // NEW: when a WhatsApp confirm prompt is deferred, preserve the after-say chain here
+    @Nullable
+    private volatile Intent pendingAfterSayWhatsApp = null;
+
+    @Nullable
+    private Intent pendingAfterSay;
 
     private static final String TAG = "WakeWord";
     private static final String CHANNEL_ID = "toto_listening";
 
-    private static final long MIN_COOLDOWN_MS   = 1500;
-    private static final long DEDUPE_WINDOW_MS  = 2500;
+    private static final long MIN_COOLDOWN_MS = 1500;
+    private static final long DEDUPE_WINDOW_MS = 2500;
 
-    private long   lastTriggerAt     = 0L;
-    private long   lastDetectionAt   = 0L;
+    private long lastTriggerAt = 0L;
+    private long lastDetectionAt = 0L;
     private String lastDetectionText = "";
     private volatile boolean triggered = false;
 
@@ -89,17 +101,19 @@ public class WakeWordService extends Service implements RecognitionListener {
     private final java.util.Queue<String> pendingSentQueue = new java.util.ArrayDeque<>();
 
     private PowerManager.WakeLock wakeLock;
-    @Nullable private AudioFocusRequest audioFocusRequest;
+    @Nullable
+    private AudioFocusRequest audioFocusRequest;
 
     // Estado de pausa de escucha
     private volatile boolean listeningPaused = false;
 
     // “tipo” de lo que se está diciendo ahora ("ACK" o "SAY")
-    @Nullable private String currentUtteranceKind = null;
+    @Nullable
+    private String currentUtteranceKind = null;
 
     private volatile long blockWakeUntilMs = 0L;
 
-    private static final String[] ACK_TEMPLATES = new String[] {
+    private static final String[] ACK_TEMPLATES = new String[]{
             "¿En qué te puedo ayudar, %s?",
             "Sí, %s, decime.",
             "Te escucho, %s.",
@@ -123,12 +137,16 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     private void releaseWakeLock() {
         if (wakeLock != null && wakeLock.isHeld()) {
-            try { wakeLock.release(); } catch (Exception ignored) {}
+            try {
+                wakeLock.release();
+            } catch (Exception ignored) {
+            }
         }
     }
 
     private final BroadcastReceiver cmdFinishedReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) {
+        @Override
+        public void onReceive(Context context, Intent intent) {
             Log.d(TAG, "ACTION_CMD_FINISHED (broadcast) → rearmar wake");
             rearmWake();
         }
@@ -136,7 +154,8 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     // Fallback receiver: some code may broadcast ACTION_PENDING_SENT (legacy); handle it by enqueuing/speaking
     private final BroadcastReceiver pendingSentReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) {
+        @Override
+        public void onReceive(Context context, Intent intent) {
             String txt = (intent != null) ? intent.getStringExtra("text") : null;
             if (txt == null || txt.trim().isEmpty()) return;
             Log.d(TAG, "pendingSentReceiver received text=" + txt);
@@ -146,16 +165,21 @@ public class WakeWordService extends Service implements RecognitionListener {
                     speakText(txt);
                 } else {
                     Log.d(TAG, "pendingSentReceiver: enqueueing because busy/not ready");
-                    synchronized (pendingSentQueue) { pendingSentQueue.add(txt); }
+                    synchronized (pendingSentQueue) {
+                        pendingSentQueue.add(txt);
+                    }
                 }
-            } catch (Exception e) { Log.w(TAG, "pendingSentReceiver error", e); }
+            } catch (Exception e) {
+                Log.w(TAG, "pendingSentReceiver error", e);
+            }
         }
     };
 
     private final BroadcastReceiver fallReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) {
+        @Override
+        public void onReceive(Context context, Intent intent) {
             String src = intent.getStringExtra(FallSignals.EXTRA_SOURCE);
-            String un  = intent.getStringExtra(FallSignals.EXTRA_USER_NAME);
+            String un = intent.getStringExtra(FallSignals.EXTRA_USER_NAME);
 
             if (!FallSignals.tryActivate()) return;
 
@@ -181,14 +205,14 @@ public class WakeWordService extends Service implements RecognitionListener {
         super.onCreate();
 
         IntentFilter filter = new IntentFilter(ACTION_CMD_FINISHED);
-        // always register with explicit export flags to satisfy modern lint (RECEIVER_NOT_EXPORTED)
-        try { registerReceiver(cmdFinishedReceiver, filter, Context.RECEIVER_NOT_EXPORTED); } catch (Exception e) { registerReceiver(cmdFinishedReceiver, filter); }
+        // Usar ContextCompat.registerReceiver para manejar flags en todas las APIs
+        ContextCompat.registerReceiver(this, cmdFinishedReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
 
         IntentFilter fFall = new IntentFilter(FallSignals.ACTION_FALL_DETECTED);
-        try { registerReceiver(fallReceiver, fFall, Context.RECEIVER_NOT_EXPORTED); } catch (Exception e) { registerReceiver(fallReceiver, fFall); }
+        ContextCompat.registerReceiver(this, fallReceiver, fFall, ContextCompat.RECEIVER_NOT_EXPORTED);
 
         IntentFilter fPending = new IntentFilter("com.example.toto_app.ACTION_PENDING_SENT");
-        try { registerReceiver(pendingSentReceiver, fPending, Context.RECEIVER_NOT_EXPORTED); } catch (Exception e) { registerReceiver(pendingSentReceiver, fPending); }
+        ContextCompat.registerReceiver(this, pendingSentReceiver, fPending, ContextCompat.RECEIVER_NOT_EXPORTED);
 
         createChannel();
         updateForegroundNotification("Escuchando \"Toto\"");
@@ -201,14 +225,16 @@ public class WakeWordService extends Service implements RecognitionListener {
                 "model-es",
                 "model",
                 new StorageService.Callback<Model>() {
-                    @Override public void onComplete(Model m) {
+                    @Override
+                    public void onComplete(Model m) {
                         model = m;
                         com.example.toto_app.services.WakeWordServiceModelHolder.setModel(m);
                         startWakeListening();
                     }
                 },
                 new StorageService.Callback<IOException>() {
-                    @Override public void onComplete(IOException e) {
+                    @Override
+                    public void onComplete(IOException e) {
                         Log.e(TAG, "Error cargando modelo Vosk", e);
                         Toast.makeText(WakeWordService.this, "Error cargando modelo Vosk", Toast.LENGTH_LONG).show();
                         stopSelf();
@@ -240,36 +266,51 @@ public class WakeWordService extends Service implements RecognitionListener {
                 tts.setAudioAttributes(attrs);
 
                 tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                    @Override public void onStart(String utteranceId) {
+                    @Override
+                    public void onStart(String utteranceId) {
                         Log.d(TAG, "TTS onStart utteranceId=" + utteranceId);
                         if (utteranceId != null && (utteranceId.startsWith("toto_ack_") || utteranceId.startsWith("toto_say_"))) {
                             isSpeaking = true;
+                            // mientras el TTS está hablando, bloqueamos detección de wake por seguridad adicional
+                            blockWakeUntilMs = SystemClock.elapsedRealtime() + 10_000; // se ajustará al finalizar
                             requestTtsAudioFocus();
                         }
                     }
-                    @Override public void onDone(String utteranceId) {
+
+                    @Override
+                    public void onDone(String utteranceId) {
                         Log.d(TAG, "TTS onDone utteranceId=" + utteranceId);
                         new android.os.Handler(getMainLooper()).post(() -> {
                             finishAfterTts(/*kind=*/currentUtteranceKind);
                         });
                     }
-                    @Override public void onError(String utteranceId) { onDone(utteranceId); }
+
+                    @Override
+                    public void onError(String utteranceId) {
+                        onDone(utteranceId);
+                    }
                 });
                 // If there are pending queued messages that couldn't be spoken because TTS
                 // wasn't yet ready, speak one now (service may be idle after creation).
                 new android.os.Handler(getMainLooper()).post(() -> {
                     try {
                         String pending = null;
-                        synchronized (pendingSentQueue) { pending = pendingSentQueue.poll(); }
+                        synchronized (pendingSentQueue) {
+                            pending = pendingSentQueue.poll();
+                        }
                         if (pending != null && !isSpeaking && !FallSignals.isActive() && currentUtteranceKind == null) {
                             Log.d(TAG, "initTTS: speaking queued pending-sent TTS after TTS init: " + pending);
                             speakText(pending);
                         } else if (pending != null) {
                             // put it back if we couldn't speak now
-                            synchronized (pendingSentQueue) { pendingSentQueue.add(pending); }
+                            synchronized (pendingSentQueue) {
+                                pendingSentQueue.add(pending);
+                            }
                             Log.d(TAG, "initTTS: queued pending-sent kept because busy");
                         }
-                    } catch (Exception e) { Log.w(TAG, "initTTS pending speak error", e); }
+                    } catch (Exception e) {
+                        Log.w(TAG, "initTTS pending speak error", e);
+                    }
                 });
             } else {
                 ttsReady = false;
@@ -299,7 +340,9 @@ public class WakeWordService extends Service implements RecognitionListener {
             updateForegroundNotification("Escuchando \"Toto\"");
             // If there are queued pending TTS messages, speak the next one now (service is idle after starting)
             String next = null;
-            synchronized (pendingSentQueue) { next = pendingSentQueue.poll(); }
+            synchronized (pendingSentQueue) {
+                next = pendingSentQueue.poll();
+            }
             if (next != null && ttsReady && !FallSignals.isActive() && currentUtteranceKind == null) {
                 Log.d(TAG, "startWakeListening: speaking queued pending-sent TTS");
                 speakText(next);
@@ -313,8 +356,14 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     private void stopListening() {
         if (speechService != null) {
-            try { speechService.stop(); } catch (Exception ignored) {}
-            try { speechService.shutdown(); } catch (Exception ignored) {}
+            try {
+                speechService.stop();
+            } catch (Exception ignored) {
+            }
+            try {
+                speechService.shutdown();
+            } catch (Exception ignored) {
+            }
             speechService = null;
         }
         abandonAudioFocus();
@@ -333,11 +382,13 @@ public class WakeWordService extends Service implements RecognitionListener {
 
             audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                     .setAudioAttributes(attrs)
-                    .setOnAudioFocusChangeListener(fc -> { })
+                    .setOnAudioFocusChangeListener(fc -> {
+                    })
                     .build();
             am.requestAudioFocus(audioFocusRequest);
         } else {
-            am.requestAudioFocus(fc -> { },
+            am.requestAudioFocus(fc -> {
+                    },
                     AudioManager.STREAM_MUSIC,
                     AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
         }
@@ -366,61 +417,87 @@ public class WakeWordService extends Service implements RecognitionListener {
         if (intent != null) {
             String action = intent.getAction();
 
-            if (ACTION_SAY.equals(action)) {
-                String toSay = intent.getStringExtra("text");
-                boolean enqueueIfBusy = intent.getBooleanExtra(EXTRA_ENQUEUE_IF_BUSY, false);
-                Log.d(TAG, "ACTION_SAY received -> text=" + toSay + " enqueueIfBusy=" + enqueueIfBusy);
-                boolean chain = intent.getBooleanExtra(EXTRA_AFTER_SAY_START_SERVICE, false);
-                if (chain) {
-                    Intent next = new Intent(this, InstructionService.class);
-                    String un = intent.getStringExtra(EXTRA_AFTER_SAY_USER_NAME);
-                    if (un != null) next.putExtra("user_name", un);
-                    String fm = intent.getStringExtra(EXTRA_AFTER_SAY_FALL_MODE);
-                    if (fm != null) next.putExtra("fall_mode", fm);
-                    pendingAfterSay = next;
-                } else {
-                    pendingAfterSay = null;
-                }
-
-                if (toSay != null && !toSay.trim().isEmpty()) {
-                    if (enqueueIfBusy) {
-                        // enqueue if busy or TTS not ready
-                        if (ttsReady && !isSpeaking && !FallSignals.isActive() && currentUtteranceKind == null) {
-                            Log.d(TAG, "ACTION_SAY: speaking immediately");
-                            speakText(toSay.trim());
-                        } else {
-                            Log.d(TAG, "ACTION_SAY: enqueuing message");
-                            synchronized (pendingSentQueue) { pendingSentQueue.add(toSay.trim()); }
-                        }
-                    } else {
-                        Log.d(TAG, "ACTION_SAY: forced speak");
-                        speakText(toSay.trim());
-                    }
-                }
-                return START_NOT_STICKY;
-            }
-
             if (ACTION_PAUSE_LISTEN.equals(action)) {
                 pauseListening();
                 return START_STICKY;
             }
             if (ACTION_RESUME_LISTEN.equals(action)) {
-               String reason = intent.getStringExtra(EXTRA_REASON);
-                if (REASON_FALL_CLEAR.equals(reason)) {
-                    blockWakeUntilMs = SystemClock.elapsedRealtime() + 3000;
-                    Log.d(TAG, "Resume after FALL_CLEAR → block wake until " + blockWakeUntilMs);
-                }
                 resumeListening();
+                // intentar hablar confirmación pendiente si ya no estamos ocupados
+                maybeSpeakPendingWhatsApp();
                 return START_STICKY;
             }
-
             if (ACTION_STOP_TTS.equals(action)) {
                 stopSpeaking();
                 return START_STICKY;
             }
 
+            if (ACTION_SAY.equals(action)) {
+                String toSay = intent.getStringExtra("text");
+                boolean chain = intent.getBooleanExtra(EXTRA_AFTER_SAY_START_SERVICE, false);
+                // Extra flags for WhatsApp confirm flow (aceptar ambas claves por compat)
+                boolean confirmWa = intent.getBooleanExtra(EXTRA_AFTER_SAY_CONFIRM_WHATSAPP, false)
+                        || intent.getBooleanExtra("confirmWa", false);
+                boolean enqueueIfBusy = intent.getBooleanExtra(EXTRA_ENQUEUE_IF_BUSY, false)
+                        || intent.getBooleanExtra("enqueueIfBusy", false);
+
+                Intent next = null;
+                if (chain) {
+                    next = new Intent(this, InstructionService.class);
+                    String un = intent.getStringExtra(EXTRA_AFTER_SAY_USER_NAME);
+                    if (un != null) next.putExtra("user_name", un);
+                    String fm = intent.getStringExtra(EXTRA_AFTER_SAY_FALL_MODE);
+                    if (fm != null) next.putExtra("fall_mode", fm);
+                    if (confirmWa) next.putExtra("confirm_whatsapp", true);
+                }
+
+                if (toSay != null && !toSay.trim().isEmpty()) {
+                    String payload = toSay.trim();
+                    // Evitar que cualquier TTS dispare el wake word si menciona "Toto"
+                    payload = sanitizeWakeWordInside(payload);
+
+                    boolean busy = isSpeaking || FallSignals.isActive() || InstructionService.isConversationActive();
+                    if ((enqueueIfBusy || confirmWa) && (busy || pendingWhatsAppConfirm)) {
+                        Log.d(TAG, "ACTION_SAY: skipping immediate/duplicate WhatsApp confirm because " +
+                                (pendingWhatsAppConfirm ? "pending" : "busy"));
+                        pendingWhatsAppConfirm = true;
+                        pendingWhatsAppText = payload;
+                        // preserve after-say chain for when we actually speak later
+                        if (confirmWa && next != null) {
+                            pendingAfterSayWhatsApp = next;
+                        }
+                        return START_NOT_STICKY;
+                    }
+
+                    // hablar ahora; prepare after-say chain if any
+                    if (chain && next != null) {
+                        pendingAfterSay = next;
+                    } else if (confirmWa && next != null) {
+                        // if confirm without chain flag (compat), still ensure after-say
+                        pendingAfterSay = next;
+                    }
+                    speakText(payload);
+                } else {
+                    // even if we had no text, keep chain if set to ensure later flows
+                    if (chain && next != null) {
+                        pendingAfterSay = next;
+                    }
+                }
+                return START_NOT_STICKY;
+            }
+
+            if ("com.example.toto_app.ACTION_WHATSAPP_HANDLED".equals(action)) {
+                Log.d(TAG, "ACTION_WHATSAPP_HANDLED received -> clearing pendingWhatsAppConfirm flag");
+                pendingWhatsAppConfirm = false;
+                pendingWhatsAppText = null;
+                pendingAfterSayWhatsApp = null;
+                return START_STICKY;
+            }
+
             if (ACTION_CMD_FINISHED.equals(action)) {
                 Log.d(TAG, "ACTION_CMD_FINISHED (startService) → rearmar wake");
+                // Si hay un prompt pendiente de WhatsApp y ya no estamos ocupados, hablar ahora
+                maybeSpeakPendingWhatsApp();
                 rearmWake();
                 return START_STICKY;
             }
@@ -433,6 +510,71 @@ public class WakeWordService extends Service implements RecognitionListener {
             }
         }
         return START_STICKY;
+    }
+
+    // Intenta hablar la confirmación pendiente si el estado lo permite
+    private void maybeSpeakPendingWhatsApp() {
+        if (!pendingWhatsAppConfirm) return;
+        if (isSpeaking) return;
+        if (FallSignals.isActive()) return;
+        if (InstructionService.isConversationActive()) return;
+        String txt = pendingWhatsAppText;
+        if (txt == null || txt.trim().isEmpty()) return;
+        Log.d(TAG, "maybeSpeakPendingWhatsApp: speaking now pending confirm");
+        pendingWhatsAppConfirm = false;
+        pendingWhatsAppText = null;
+        // If we preserved an after-say chain for this deferred confirm, restore it so that
+        // finishAfterTts will start InstructionService to capture the answer.
+        if (pendingAfterSayWhatsApp != null) {
+            pendingAfterSay = pendingAfterSayWhatsApp;
+            pendingAfterSayWhatsApp = null;
+        }
+        speakText(txt);
+    }
+
+    /**
+     * Unifica el flujo de finalización de TTS para onDone() y stopSpeaking().
+     */
+    private void finishAfterTts(@Nullable String kindSnapshot) {
+        // reset estado TTS
+        currentUtteranceKind = null;
+        isSpeaking = false;
+        abandonAudioFocus();
+
+        if ("ACK".equals(kindSnapshot)) {
+            if (!FallSignals.isActive()) {
+                startInstructionService();
+            }
+            return;
+        }
+        if (pendingAfterSay != null) {
+            try {
+                startService(pendingAfterSay);
+            } catch (Exception ignored) {
+            }
+            pendingAfterSay = null;
+            return;
+        }
+        // Si hay una confirmación pendiente de WhatsApp y ya no estamos ocupados, hablar ahora
+        maybeSpeakPendingWhatsApp();
+
+        triggered = false;
+        lastDetectionText = "";
+        lastDetectionAt = 0L;
+        if (!listeningPaused) {
+            startWakeListening();
+        } else {
+            Log.d(TAG, "Fin TTS: en pausa → no rearmo");
+            updateForegroundNotification("Pausa: no estoy escuchando");
+        }
+    }
+
+    private String sanitizeWakeWordInside(String s) {
+        try {
+            return s.replaceAll("(?i)\\btoto\\b", "to to");
+        } catch (Exception ignore) {
+            return s;
+        }
     }
 
     private void rearmWake() {
@@ -450,24 +592,63 @@ public class WakeWordService extends Service implements RecognitionListener {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        try { unregisterReceiver(cmdFinishedReceiver); } catch (Exception ignored) {}
-        try { unregisterReceiver(fallReceiver); } catch (Exception ignored) {}
-        try { unregisterReceiver(pendingSentReceiver); } catch (Exception ignored) {}
+        try {
+            unregisterReceiver(cmdFinishedReceiver);
+        } catch (Exception ignored) {
+        }
+        try {
+            unregisterReceiver(fallReceiver);
+        } catch (Exception ignored) {
+        }
+        try {
+            unregisterReceiver(pendingSentReceiver);
+        } catch (Exception ignored) {
+        }
         stopListening();
-        if (model != null) { model.close(); model = null; }
-        if (tts != null) { try { tts.stop(); } catch (Exception ignored) {} tts.shutdown(); tts = null; }
+        if (model != null) {
+            model.close();
+            model = null;
+        }
+        if (tts != null) {
+            try {
+                tts.stop();
+            } catch (Exception ignored) {
+            }
+            tts.shutdown();
+            tts = null;
+        }
         releaseWakeLock();
         abandonAudioFocus();
     }
 
-    @Nullable @Override public IBinder onBind(Intent intent) { return null; }
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
 
     // === RecognitionListener ===
-    @Override public void onPartialResult(String hypothesis) { checkForWakeWord(hypothesis); }
-    @Override public void onResult(String hypothesis) { checkForWakeWord(hypothesis); }
-    @Override public void onFinalResult(String hypothesis) { /* no-op extra */ }
-    @Override public void onError(Exception e) { Log.e(TAG, "ASR error", e); }
-    @Override public void onTimeout() { }
+    @Override
+    public void onPartialResult(String hypothesis) {
+        checkForWakeWord(hypothesis);
+    }
+
+    @Override
+    public void onResult(String hypothesis) {
+        checkForWakeWord(hypothesis);
+    }
+
+    @Override
+    public void onFinalResult(String hypothesis) { /* no-op extra */ }
+
+    @Override
+    public void onError(Exception e) {
+        Log.e(TAG, "ASR error", e);
+    }
+
+    @Override
+    public void onTimeout() {
+    }
 
     private static final Pattern WAKE_PATTERN = Pattern.compile("\\btoto\\b");
 
@@ -475,6 +656,10 @@ public class WakeWordService extends Service implements RecognitionListener {
         try {
             long now = SystemClock.elapsedRealtime();
             if (now < blockWakeUntilMs) {
+                return;
+            }
+
+            if (isSpeaking) { // Ignorar cualquier detección mientras el TTS esté activo
                 return;
             }
 
@@ -509,7 +694,8 @@ public class WakeWordService extends Service implements RecognitionListener {
                     Log.d(TAG, "Ignorado (cooldown o ya triggered)");
                 }
             }
-        } catch (Exception ignored) { }
+        } catch (Exception ignored) {
+        }
     }
 
     private void onWakeWordDetected() {
@@ -579,47 +765,14 @@ public class WakeWordService extends Service implements RecognitionListener {
             Log.d(TAG, "stopSpeaking: no hay TTS en curso");
             return;
         }
-        try { tts.stop(); } catch (Exception ignored) {}
+        try {
+            tts.stop();
+        } catch (Exception ignored) {
+        }
         finishAfterTts(/*kind=*/currentUtteranceKind);
     }
 
-    /** Unifica el flujo de finalización de TTS para onDone() y stopSpeaking(). */
-    private void finishAfterTts(@Nullable String kindSnapshot) {
-        // reset estado TTS
-        currentUtteranceKind = null;
-        isSpeaking = false;
-        abandonAudioFocus();
-
-        if ("ACK".equals(kindSnapshot)) {
-            if (!FallSignals.isActive()) {
-                startInstructionService();
-            }
-            return;
-        }
-        if (pendingAfterSay != null) {
-            try { startService(pendingAfterSay); } catch (Exception ignored) {}
-            pendingAfterSay = null;
-            return;
-        }
-        // If there are queued pending-sent TTS messages, speak them now (one by one)
-        String next = null;
-        synchronized (pendingSentQueue) { next = pendingSentQueue.poll(); }
-        if (next != null && ttsReady && !FallSignals.isActive()) {
-            // speak the queued message and return; finishAfterTts will be called again after it
-            speakText(next);
-            return;
-        }
-        triggered = false;
-        lastDetectionText = "";
-        lastDetectionAt = 0L;
-        if (!listeningPaused) {
-            startWakeListening();
-        } else {
-            Log.d(TAG, "Fin TTS: en pausa → no rearmo");
-            updateForegroundNotification("Pausa: no estoy escuchando");
-        }
-    }
-
+    // Pausar/reanudar escucha (FGS sigue activo con notificación)
     private void pauseListening() {
         listeningPaused = true;
         stopListening();
