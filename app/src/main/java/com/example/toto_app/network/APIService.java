@@ -11,6 +11,7 @@ import retrofit2.Call;
 import retrofit2.http.Body;
 import retrofit2.http.DELETE;
 import retrofit2.http.GET;
+import retrofit2.http.HTTP;
 import retrofit2.http.Multipart;
 import retrofit2.http.PATCH;
 import retrofit2.http.POST;
@@ -92,6 +93,14 @@ public interface APIService {
 
     @GET("api/reminders/today")
     Call<List<ReminderDTO>> getTodayReminders(@Query("elderlyId") Long elderlyId, @Query("type") String type);
+
+    @HTTP(method = "DELETE", path = "api/reminders/search", hasBody = false)
+    Call<Map<String, Object>> deleteRemindersByCriteria(
+            @Query("elderlyId") Long elderlyId,
+            @Query("title") String title,
+            @Query("hour") Integer hour,
+            @Query("minute") Integer minute,
+            @Query("type") String type);
 
     // History endpoints
     @GET("api/history")

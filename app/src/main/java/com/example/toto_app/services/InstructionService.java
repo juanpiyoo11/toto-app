@@ -1019,6 +1019,61 @@ public class InstructionService extends android.app.Service {
                 stopSelf(); return;
             }
 
+            case "DELETE_REMINDER": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
+                try {
+                    Long elderlyId = userDataManager.getUserId();
+                    if (elderlyId == null) {
+                        sayViaWakeService("No pude identificar tu usuario.", 0);
+                        stopSelf(); return;
+                    }
+
+                    // Extract criteria from slots
+                    String title = null;
+                    Integer hour = null;
+                    Integer minute = null;
+                    String type = null;
+
+                    if (nres != null && nres.slots != null) {
+                        title = nres.slots.reminder_title;
+                        if (nres.slots.hour != null) hour = nres.slots.hour;
+                        if (nres.slots.minute != null) minute = nres.slots.minute;
+                        type = nres.slots.query_reminder_type;
+                    }
+
+                    if (title == null || title.isEmpty()) {
+                        sayViaWakeService("No entendí qué recordatorio querés eliminar.", 0);
+                        stopSelf(); return;
+                    }
+
+                    retrofit2.Response<java.util.Map<String, Object>> r = 
+                        RetrofitClient.api().deleteRemindersByCriteria(elderlyId, title, hour, minute, type).execute();
+                    
+                    if (r.isSuccessful() && r.body() != null) {
+                        Object countObj = r.body().get("deletedCount");
+                        int deletedCount = 0;
+                        if (countObj instanceof Number) {
+                            deletedCount = ((Number) countObj).intValue();
+                        }
+
+                        if (deletedCount > 0) {
+                            String msg = deletedCount == 1 
+                                ? "Listo, eliminé el recordatorio." 
+                                : "Listo, eliminé " + deletedCount + " recordatorios.";
+                            sayViaWakeService(msg, 0);
+                        } else {
+                            sayViaWakeService("No encontré ningún recordatorio que coincida.", 0);
+                        }
+                    } else {
+                        sayViaWakeService("No pude eliminar el recordatorio ahora.", 0);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error deleting reminder", ex);
+                    sayViaWakeService("No pude eliminar el recordatorio ahora.", 0);
+                }
+                stopSelf(); return;
+            }
+
             case "CONFIRM_MEDICATION": {
                 if (FallSignals.isActive()) { stopSelf(); return; }
                 // Get last announced reminder from store
