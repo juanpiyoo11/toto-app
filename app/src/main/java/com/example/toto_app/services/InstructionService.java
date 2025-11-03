@@ -394,6 +394,15 @@ public class InstructionService extends android.app.Service {
             if (sPendingReminderPattern != null) context.put("pending_reminder_pattern", sPendingReminderPattern);
             context.put("awaiting_clarification", "hour_for_reminder");
         }
+        
+        // Check if we're awaiting medication confirmation
+        PendingReminderDTO awaitingReminder = PendingReminderStore.get().getLastAnnounced();
+        if (awaitingReminder != null && PendingReminderStore.get().isAwaitingMedicationConfirm()) {
+            if (context == null) context = new java.util.HashMap<>();
+            context.put("awaiting_medication_confirmation", true);
+            context.put("pending_medication_title", awaitingReminder.getTitle());
+            context.put("pending_medication_id", awaitingReminder.getId());
+        }
 
         NluRouteResponse nres = NluResolver.resolveWithFallback(transcript, context);
         String intentName = (nres != null && nres.intent != null)
