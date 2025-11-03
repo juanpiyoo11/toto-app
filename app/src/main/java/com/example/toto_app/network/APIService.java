@@ -92,7 +92,10 @@ public interface APIService {
     Call<Void> recordMedicationSkipped(@Path("id") Long id, @Query("elderlyId") Long elderlyId, @Body Map<String, String> body);
 
     @GET("api/reminders/today")
-    Call<List<ReminderDTO>> getTodayReminders(@Query("elderlyId") Long elderlyId, @Query("type") String type);
+    Call<List<ReminderDTO>> getTodayReminders(
+            @Query("elderlyId") Long elderlyId, 
+            @Query("type") String type,
+            @Query("date") String date);
 
     @HTTP(method = "DELETE", path = "api/reminders/search", hasBody = false)
     Call<Map<String, Object>> deleteRemindersByCriteria(

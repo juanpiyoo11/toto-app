@@ -963,12 +963,19 @@ public class InstructionService extends android.app.Service {
 
                     // Extract reminder type filter from slots
                     String queryType = null;
-                    if (nres != null && nres.slots != null && nres.slots.query_reminder_type != null && !nres.slots.query_reminder_type.isEmpty()) {
-                        queryType = nres.slots.query_reminder_type;
+                    String dateFilter = null;
+                    if (nres != null && nres.slots != null) {
+                        if (nres.slots.query_reminder_type != null && !nres.slots.query_reminder_type.isEmpty()) {
+                            queryType = nres.slots.query_reminder_type;
+                        }
+                        if (nres.slots.datetime_iso != null && !nres.slots.datetime_iso.isEmpty()) {
+                            // Extract date part only (YYYY-MM-DD)
+                            dateFilter = nres.slots.datetime_iso.substring(0, Math.min(10, nres.slots.datetime_iso.length()));
+                        }
                     }
 
                     retrofit2.Response<java.util.List<ReminderDTO>> r = 
-                        RetrofitClient.api().getTodayReminders(elderlyId, queryType).execute();
+                        RetrofitClient.api().getTodayReminders(elderlyId, queryType, dateFilter).execute();
                     
                     if (r.isSuccessful() && r.body() != null && !r.body().isEmpty()) {
                         // Build response message based on type

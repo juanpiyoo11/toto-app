@@ -2,7 +2,6 @@ package com.example.toto_app.services;
 
 import android.app.Service;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -28,16 +27,16 @@ public class ReminderPollingService extends Service {
 
     private static final String TAG = "ReminderPolling";
     private static final long POLL_INTERVAL_MS = 120000; // 2 minutes
-    private static final String PREFS_NAME = "TotoPrefs";
-    private static final String KEY_ELDERLY_ID = "elderly_id";
 
     private Handler handler;
     private Runnable pollRunnable;
     private boolean isRunning = false;
+    private UserDataManager userDataManager;
 
     @Override
     public void onCreate() {
         super.onCreate();
+        userDataManager = new UserDataManager(this);
         handler = new Handler(Looper.getMainLooper());
         pollRunnable = new Runnable() {
             @Override
@@ -48,6 +47,7 @@ public class ReminderPollingService extends Service {
                 }
             }
         };
+        Log.d(TAG, "ReminderPollingService created");
     }
 
     @Override
@@ -77,12 +77,14 @@ public class ReminderPollingService extends Service {
     }
 
     private void pollForReminders() {
-        Long elderlyId = getElderlyId();
+        Long elderlyId = userDataManager.getUserId();
         if (elderlyId == null) {
             Log.w(TAG, "No elderly ID configured, skipping poll");
             return;
         }
 
+        Log.d(TAG, "Polling for reminders for elderlyId=" + elderlyId);
+        
         try {
             RetrofitClient.api().getPendingReminders(elderlyId)
                     .enqueue(new Callback<List<PendingReminderDTO>>() {
@@ -170,11 +172,5 @@ public class ReminderPollingService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "Error notifying backend", e);
         }
-    }
-
-    private Long getElderlyId() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        long id = prefs.getLong(KEY_ELDERLY_ID, -1L);
-        return id > 0 ? id : null;
     }
 }
