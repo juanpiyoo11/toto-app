@@ -987,9 +987,10 @@ public class InstructionService extends android.app.Service {
                         java.util.List<ReminderDTO> reminders = r.body();
                         for (int i = 0; i < reminders.size(); i++) {
                             ReminderDTO rem = reminders.get(i);
-                            String desc = rem.getDescription();
-                            if (desc == null || desc.isEmpty()) desc = rem.getTitle();
-                            reply.append(desc != null ? desc : "recordatorio");
+                            // Use title instead of description
+                            String title = rem.getTitle();
+                            if (title == null || title.isEmpty()) title = "recordatorio";
+                            reply.append(title);
                             if (rem.getReminderTime() != null && !rem.getReminderTime().isEmpty()) {
                                 reply.append(", ").append(formatDateTimeForSpeech(rem.getReminderTime()));
                             }

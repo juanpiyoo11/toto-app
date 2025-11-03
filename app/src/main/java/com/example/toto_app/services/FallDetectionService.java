@@ -277,18 +277,18 @@ public class FallDetectionService extends Service {
 
                 String path = passBassy ? "LF" : (passFarField ? "FF" : "--");
 
-                Log.d(TAG,
-                        "Top=" + topLabel + " (" + String.format("%.2f", topScore) + ")  " +
-                                "Impact=" + hasImpact +
-                                " RMS=" + String.format("%.2f", rmsPeak) +
-                                " LF%=" + String.format("%.2f", lfRatio) +
-                                " HF%=" + String.format("%.2f", hfRatio) +
-                                " Ctr=" + String.format("%.0f", centroid) +
-                                " W=" + String.format("%.0fms", widthMs) +
-                                " Post=" + calmAfter +
-                                " path=" + path +
-                                " → FALL=" + isFall
-                );
+//                Log.d(TAG,
+//                        "Top=" + topLabel + " (" + String.format("%.2f", topScore) + ")  " +
+//                                "Impact=" + hasImpact +
+//                                " RMS=" + String.format("%.2f", rmsPeak) +
+//                                " LF%=" + String.format("%.2f", lfRatio) +
+//                                " HF%=" + String.format("%.2f", hfRatio) +
+//                                " Ctr=" + String.format("%.0f", centroid) +
+//                                " W=" + String.format("%.0fms", widthMs) +
+//                                " Post=" + calmAfter +
+//                                " path=" + path +
+//                                " → FALL=" + isFall
+//                );
 
                 if (isFall) {
                     if (!com.example.toto_app.falls.FallSignals.tryActivate()) {
