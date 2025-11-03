@@ -138,9 +138,15 @@ public class ReminderPollingService extends Service {
         i.setAction(WakeWordService.ACTION_SAY);
         i.putExtra("text", reminder.getTtsMessage());
         i.putExtra(WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
-        i.putExtra(WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true);
+        
+        // Only start instruction service (to listen for response) if it's a medication
+        boolean isMedication = reminder.getIsMedication() != null && reminder.getIsMedication();
+        if (isMedication) {
+            i.putExtra(WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true);
+        }
+        
         i.putExtra("reminder_id", reminder.getId());
-        i.putExtra("is_medication", reminder.getIsMedication() != null && reminder.getIsMedication());
+        i.putExtra("is_medication", isMedication);
         
         // Mark as announced in store
         PendingReminderStore.get().markAnnounced(reminder);
