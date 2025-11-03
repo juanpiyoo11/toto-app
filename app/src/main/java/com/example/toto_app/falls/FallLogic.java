@@ -182,15 +182,15 @@ public final class FallLogic {
                     || (wbody.id != null && !wbody.id.trim().isEmpty()));
             if (ok) return 0;
             
-            // Check if it's a server error (5xx) or network issue vs client error (4xx)
+            // Check if it's a server error, 404 (server down), 5xx, or network issue vs client error (like 409)
             int code = wresp.code();
-            if (code >= 500 || code == 0) {
-                // Server error or network error -> queue for retry
+            if (code >= 500 || code == 0 || code == 404) {
+                // Server error, 404 (backend down), or network error -> queue for retry
                 PendingEmergencyStore.get().add(numberE164, userName);
                 try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
                 return 1;
             } else {
-                // Client error (4xx like 409) -> don't queue, it won't work on retry
+                // Client error (4xx like 409 recipient not allowed) -> don't queue, it won't work on retry
                 Log.w("FallLogic", "Client error " + code + " sending to " + to + " - not queuing");
                 return 2;
             }
