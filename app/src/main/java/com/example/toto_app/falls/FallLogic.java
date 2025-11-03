@@ -194,4 +194,26 @@ public final class FallLogic {
             return 1;
         }
     }
+
+    /**
+     * Send emergency message to multiple contacts.
+     * Returns the worst result: 0=all sent, 1=some queued, 2=all failed
+     */
+    public static int sendEmergencyMessageToMultiple(java.util.List<String> phoneNumbers, String userName) {
+        if (phoneNumbers == null || phoneNumbers.isEmpty()) return 2;
+        
+        int worstResult = 0;
+        int sentCount = 0;
+        
+        for (String phone : phoneNumbers) {
+            if (phone == null || phone.trim().isEmpty()) continue;
+            
+            int result = sendEmergencyMessageToResult(phone, userName);
+            if (result > worstResult) worstResult = result;
+            if (result == 0) sentCount++;
+        }
+        
+        Log.d("FallLogic", "Emergency messages sent to " + sentCount + "/" + phoneNumbers.size() + " contacts");
+        return worstResult;
+    }
 }

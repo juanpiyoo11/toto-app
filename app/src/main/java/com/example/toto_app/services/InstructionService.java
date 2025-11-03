@@ -147,12 +147,11 @@ public class InstructionService extends android.app.Service {
                 if (fallRetry <= 0) {
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
-                    String emergencyPhone = userDataManager.getEmergencyContactPhone();
+                    int res = sendEmergencyToAllContacts();
                     String emergencyName = userDataManager.getEmergencyContactName();
-                    int res = FallLogic.sendEmergencyMessageToResult(emergencyPhone, userDataManager.getUserName());
-                    if (res == 0) sayViaWakeService("No te escuché. Ya avisé a " + emergencyName + ".", 0);
+                    if (res == 0) sayViaWakeService("No te escuché. Ya avisé a tus contactos de emergencia.", 0);
                     else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
-                    else sayViaWakeService("No te escuché y no pude avisar a " + emergencyName + ".", 0);
+                    else sayViaWakeService("No te escuché y no pude avisar a tus contactos.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -201,12 +200,10 @@ public class InstructionService extends android.app.Service {
                 if (fallRetry <= 0) {
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
-                    String emergencyPhone = userDataManager.getEmergencyContactPhone();
-                    String emergencyName = userDataManager.getEmergencyContactName();
-                    int res = FallLogic.sendEmergencyMessageToResult(emergencyPhone, userDataManager.getUserName());
-                    if (res == 0) sayViaWakeService("No te escuché. Ya avisé a " + emergencyName + ".", 0);
+                    int res = sendEmergencyToAllContacts();
+                    if (res == 0) sayViaWakeService("No te escuché. Ya avisé a tus contactos de emergencia.", 0);
                     else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
-                    else sayViaWakeService("No te escuché y no pude avisar a " + emergencyName + ".", 0);
+                    else sayViaWakeService("No te escuché y no pude avisar a tus contactos.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -222,12 +219,10 @@ public class InstructionService extends android.app.Service {
             FallLogic.FallReply fr = FallLogic.assessFallReply(norm);
             switch (fr) {
                 case HELP: {
-                    String emergencyPhone = userDataManager.getEmergencyContactPhone();
-                    String emergencyName = userDataManager.getEmergencyContactName();
-                    int res = FallLogic.sendEmergencyMessageToResult(emergencyPhone, userDataManager.getUserName());
-                    if (res == 0) sayViaWakeService("Ya avisé a " + emergencyName + ".", 0);
+                    int res = sendEmergencyToAllContacts();
+                    if (res == 0) sayViaWakeService("Ya avisé a tus contactos de emergencia.", 0);
                     else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
-                    else    sayViaWakeService("Quise avisar a " + emergencyName + " pero no pude enviar el mensaje.", 0);
+                    else    sayViaWakeService("Quise avisar a tus contactos pero no pude enviar los mensajes.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -1118,5 +1113,28 @@ public class InstructionService extends android.app.Service {
             try { Thread.sleep(800); } catch (InterruptedException ignored) {}
         }
         return false;
+    }
+
+    /**
+     * Send emergency message to all contacts (caregivers + trusted contacts).
+     * Returns result code: 0=sent, 1=queued, 2=failed
+     */
+    private int sendEmergencyToAllContacts() {
+        java.util.List<com.example.toto_app.network.EmergencyContactDTO> allContacts = 
+                userDataManager.getAllEmergencyContacts();
+        
+        if (allContacts.isEmpty()) {
+            Log.w(TAG, "No emergency contacts found");
+            return 2;
+        }
+        
+        java.util.List<String> phoneNumbers = new java.util.ArrayList<>();
+        for (com.example.toto_app.network.EmergencyContactDTO contact : allContacts) {
+            if (contact.getPhone() != null && !contact.getPhone().trim().isEmpty()) {
+                phoneNumbers.add(contact.getPhone());
+            }
+        }
+        
+        return FallLogic.sendEmergencyMessageToMultiple(phoneNumbers, userDataManager.getUserName());
     }
 }
