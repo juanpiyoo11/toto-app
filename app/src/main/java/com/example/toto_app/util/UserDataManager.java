@@ -26,6 +26,7 @@ import retrofit2.Response;
 public class UserDataManager {
     private static final String TAG = "UserDataManager";
     private static final String PREFS_NAME = "UserDataPrefs";
+    private static final String KEY_USER_ID = "userId";
     private static final String KEY_USER_NAME = "userName";
     private static final String KEY_USER_PHONE = "userPhone";
     private static final String KEY_EMERGENCY_NAME = "emergencyName";
@@ -36,6 +37,7 @@ public class UserDataManager {
     private final APIService api;
     private final Gson gson;
     
+    private Long userId;
     private String userName;
     private String userPhone;
     private String emergencyContactName;
@@ -60,11 +62,13 @@ public class UserDataManager {
             public void onResponse(Call<UserProfileDTO> call, Response<UserProfileDTO> response) {
                 if (response.isSuccessful() && response.body() != null) {
                     UserProfileDTO profile = response.body();
+                    userId = profile.getId();
                     userName = profile.getName();
                     userPhone = profile.getPhone();
                     
                     // Save to preferences
                     prefs.edit()
+                            .putLong(KEY_USER_ID, userId != null ? userId : 0L)
                             .putString(KEY_USER_NAME, userName)
                             .putString(KEY_USER_PHONE, userPhone)
                             .apply();
@@ -132,6 +136,8 @@ public class UserDataManager {
     }
     
     private void loadFromPreferences() {
+        long id = prefs.getLong(KEY_USER_ID, 0L);
+        userId = id > 0 ? id : null;
         userName = prefs.getString(KEY_USER_NAME, "Usuario");
         userPhone = prefs.getString(KEY_USER_PHONE, null);
         emergencyContactName = prefs.getString(KEY_EMERGENCY_NAME, null);
@@ -145,6 +151,11 @@ public class UserDataManager {
         } else {
             allEmergencyContacts = new ArrayList<>();
         }
+    }
+    
+    public Long getUserId() {
+        long id = prefs.getLong(KEY_USER_ID, 0L);
+        return id > 0 ? id : null;
     }
     
     public String getUserName() {

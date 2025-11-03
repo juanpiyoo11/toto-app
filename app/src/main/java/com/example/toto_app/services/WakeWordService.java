@@ -61,12 +61,17 @@ public class WakeWordService extends Service implements RecognitionListener {
     public static final String EXTRA_AFTER_SAY_USER_NAME = "after_say_user_name";
     public static final String EXTRA_AFTER_SAY_FALL_MODE = "after_say_fall_mode";
     public static final String EXTRA_AFTER_SAY_CONFIRM_WHATSAPP = "after_say_confirm_whatsapp";
+    public static final String EXTRA_AFTER_SAY_CONFIRM_REMINDER = "after_say_confirm_reminder";
+    public static final String EXTRA_REMINDER_ID = "reminder_id";
+    public static final String ACTION_REMINDER_HANDLED = "com.example.toto_app.ACTION_REMINDER_HANDLED";
 
     public static final String EXTRA_REASON = "reason";
     public static final String REASON_FALL_CLEAR = "FALL_CLEAR";
 
     // Pending WhatsApp confirmation prompt handling
     private volatile boolean pendingWhatsAppConfirm = false;
+    // Pending Reminder confirmation prompt handling (for medications)
+    private volatile boolean pendingReminderConfirm = false;
     @Nullable
     private volatile String pendingWhatsAppText = null;
     // NEW: when a WhatsApp confirm prompt is deferred, preserve the after-say chain here

@@ -24,10 +24,19 @@ public final class NluResolver {
      * Si falla o hay timeout/excepción, aplica fallbacks locales (ahora incluye ALARMAS).
      */
     public static NluRouteResponse resolveWithFallback(String transcript) {
+        return resolveWithFallback(transcript, null);
+    }
+
+    /**
+     * Intenta resolver con el backend (/api/nlu/route), opcionalmente con contexto conversacional.
+     * Si falla o hay timeout/excepción, aplica fallbacks locales (ahora incluye ALARMAS).
+     */
+    public static NluRouteResponse resolveWithFallback(String transcript, java.util.Map<String, Object> context) {
         // 1) Prioridad: backend
         try {
             NluRouteRequest rq = new NluRouteRequest();
             rq.text = transcript; // locale/tz se resuelven por default del backend
+            rq.context = context;  // Pass conversational context if available
 
             Response<NluRouteResponse> r = RetrofitClient.api().nluRoute(rq).execute();
             if (r.isSuccessful() && r.body() != null && r.body().intent != null) {

@@ -78,6 +78,21 @@ public interface APIService {
     @DELETE("api/reminders/{id}")
     Call<Void> deleteReminder(@Path("id") Long id);
 
+    @GET("api/reminders/pending")
+    Call<List<PendingReminderDTO>> getPendingReminders(@Query("elderlyId") Long elderlyId);
+
+    @POST("api/reminders/{id}/announced")
+    Call<Void> markReminderAnnounced(@Path("id") Long id, @Query("elderlyId") Long elderlyId);
+
+    @POST("api/reminders/{id}/taken")
+    Call<Void> recordMedicationTaken(@Path("id") Long id, @Query("elderlyId") Long elderlyId, @Body Map<String, String> body);
+
+    @POST("api/reminders/{id}/skipped")
+    Call<Void> recordMedicationSkipped(@Path("id") Long id, @Query("elderlyId") Long elderlyId, @Body Map<String, String> body);
+
+    @GET("api/reminders/today")
+    Call<List<ReminderDTO>> getTodayReminders(@Query("elderlyId") Long elderlyId, @Query("type") String type);
+
     // History endpoints
     @GET("api/history")
     Call<List<HistoryEventDTO>> getHistory(

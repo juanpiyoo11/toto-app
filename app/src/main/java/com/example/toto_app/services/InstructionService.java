@@ -17,6 +17,8 @@ import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.network.AskRequest;
 import com.example.toto_app.network.AskResponse;
 import com.example.toto_app.network.NluRouteResponse;
+import com.example.toto_app.network.PendingReminderDTO;
+import com.example.toto_app.network.ReminderDTO;
 import com.example.toto_app.network.RetrofitClient;
 import com.example.toto_app.network.SpotifyRepeatRequest;
 import com.example.toto_app.network.SpotifyResponse;
@@ -48,6 +50,14 @@ public class InstructionService extends android.app.Service {
     // Bandera global simple para saber si hay conversación activa (grabación/STT/NLU en curso)
     private static volatile boolean sConversationActive = false;
     public static boolean isConversationActive() { return sConversationActive; }
+
+    // Pending reminder context: when a reminder needs clarification (e.g., missing hour)
+    private static volatile String sPendingReminderMessage = null;
+    private static volatile String sPendingReminderTitle = null;
+    private static volatile String sPendingReminderType = null;
+    private static volatile String sPendingReminderPattern = null;
+    private static volatile long sPendingReminderTimestamp = 0;
+    private static final long PENDING_REMINDER_TIMEOUT_MS = 120_000; // 2 minutes
 
     private UserDataManager userDataManager;
 
@@ -272,11 +282,7 @@ public class InstructionService extends android.app.Service {
         }
 
         String normAll = FallLogic.normEs(transcript);
-        if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
-            sayThenListenHere("¿Estás bien?", "AWAIT:0");
-            stopSelf();
-            return;
-        }
+        // Ya no checkeamos caídas aquí - lo haremos solo si el backend falla
 
         try {
             String norm = java.text.Normalizer.normalize(transcript, java.text.Normalizer.Form.NFD)
@@ -377,7 +383,19 @@ public class InstructionService extends android.app.Service {
             }
         } catch (Throwable ignored) {}
 
-        NluRouteResponse nres = NluResolver.resolveWithFallback(transcript);
+        // Build context from pending reminder if exists and not expired
+        java.util.Map<String, Object> context = null;
+        if (sPendingReminderMessage != null 
+                && (System.currentTimeMillis() - sPendingReminderTimestamp) < PENDING_REMINDER_TIMEOUT_MS) {
+            context = new java.util.HashMap<>();
+            context.put("pending_reminder_message", sPendingReminderMessage);
+            if (sPendingReminderTitle != null) context.put("pending_reminder_title", sPendingReminderTitle);
+            if (sPendingReminderType != null) context.put("pending_reminder_type", sPendingReminderType);
+            if (sPendingReminderPattern != null) context.put("pending_reminder_pattern", sPendingReminderPattern);
+            context.put("awaiting_clarification", "hour_for_reminder");
+        }
+
+        NluRouteResponse nres = NluResolver.resolveWithFallback(transcript, context);
         String intentName = (nres != null && nres.intent != null)
                 ? nres.intent.trim().toUpperCase(java.util.Locale.ROOT) : "UNKNOWN";
 
@@ -395,11 +413,13 @@ public class InstructionService extends android.app.Service {
             boolean isAnswerish = "ANSWER".equals(intentName) || "UNKNOWN".equals(intentName);
             boolean isSpotifyPlay = "SPOTIFY_PLAY".equals(intentName);
             boolean isFall = "FALL".equals(intentName);
+            boolean isCreateReminder = "CREATE_REMINDER".equals(intentName);
             if (!"QUERY_TIME".equals(intentName) && !"QUERY_DATE".equals(intentName)
                     && !isAnswerish && !"CALL".equals(intentName)
                     && !"SEND_MESSAGE".equals(intentName)
                     && !isSpotifyPlay
-                    && !isFall) {
+                    && !isFall
+                    && !isCreateReminder) {
                 if (!FallSignals.isActive()) {
                     sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.ack_tts), 0);
                 } else {
@@ -416,11 +436,23 @@ public class InstructionService extends android.app.Service {
                     "SET_ALARM".equals(intentName) ||
                             "CALL".equals(intentName) ||
                             "SEND_MESSAGE".equals(intentName) ||
-                            "SPOTIFY_PLAY".equals(intentName);
+                            "SPOTIFY_PLAY".equals(intentName) ||
+                            "CREATE_REMINDER".equals(intentName);
 
             if (actionable) {
                 if (!FallSignals.isActive()) {
-                    sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()), 0);
+                    // If it's a CREATE_REMINDER waiting for hour, save pending state
+                    if ("CREATE_REMINDER".equals(intentName) && nres.slots != null) {
+                        sPendingReminderMessage = nres.slots.message_text;
+                        sPendingReminderTitle = nres.slots.reminder_title;
+                        sPendingReminderType = nres.slots.reminder_type;
+                        sPendingReminderPattern = nres.slots.repeat_pattern;
+                        sPendingReminderTimestamp = System.currentTimeMillis();
+                        Log.d(TAG, "Saved pending reminder: " + sPendingReminderMessage);
+                    }
+                    
+                    // Say the clarifying question and then activate microphone to listen for response
+                    sayThenListen(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()));
                 }
                 stopSelf();
                 return;
@@ -831,22 +863,267 @@ public class InstructionService extends android.app.Service {
                 sayViaWakeService("Listo.", 0);
                 stopSelf(); return;
             }
+
+            case "CREATE_REMINDER": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
+                String msgText = (nres != null && nres.slots != null) ? nres.slots.message_text : null;
+                String reminderTitle = (nres != null && nres.slots != null) ? nres.slots.reminder_title : null;
+                String reminderType = (nres != null && nres.slots != null) ? nres.slots.reminder_type : null;
+                String repeatPattern = (nres != null && nres.slots != null) ? nres.slots.repeat_pattern : null;
+                Integer hh = (nres != null && nres.slots != null) ? nres.slots.hour : null;
+                Integer mm = (nres != null && nres.slots != null) ? nres.slots.minute : null;
+
+                if (msgText == null || msgText.isBlank()) {
+                    sayViaWakeService("¿Qué querés que te recuerde?", 0);
+                    stopSelf(); return;
+                }
+
+                // If we have datetime_iso, parse it
+                if ((hh == null || mm == null) && nres != null && nres.slots != null
+                        && nres.slots.datetime_iso != null && !nres.slots.datetime_iso.isEmpty()) {
+                    int[] hm = tryParseIsoToLocalHourMinute(nres.slots.datetime_iso);
+                    if (hm != null) { hh = hm[0]; mm = hm[1]; }
+                }
+
+                if (hh == null || mm == null) {
+                    // Need clarification on time
+                    if (nres != null && nres.clarifying_question != null && !nres.clarifying_question.isBlank()) {
+                        sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question), 0);
+                    } else {
+                        sayViaWakeService("¿A qué hora querés que te lo recuerde?", 0);
+                    }
+                    stopSelf(); return;
+                }
+
+                // Create reminder via API
+                try {
+                    Long elderlyId = userDataManager.getUserId();
+                    if (elderlyId == null) {
+                        sayViaWakeService("No pude identificar tu usuario.", 0);
+                        stopSelf(); return;
+                    }
+
+                    ReminderDTO reminder = new ReminderDTO();
+                    reminder.setElderlyId(elderlyId);
+                    reminder.setReminderTime(formatTimeForBackend(hh, mm));
+                    
+                    // Use reminder_title if available, otherwise use message_text
+                    String title = (reminderTitle != null && !reminderTitle.isBlank()) ? reminderTitle : msgText;
+                    reminder.setTitle(title);
+                    reminder.setDescription(msgText);
+                    reminder.setActive(true);
+                    
+                    // Use intelligent reminder type from NLU, default to EVENT if not provided
+                    if (reminderType != null && !reminderType.isBlank()) {
+                        reminder.setReminderType(reminderType.toUpperCase());
+                    } else {
+                        reminder.setReminderType("EVENT");
+                    }
+                    
+                    // Use intelligent repeat pattern from NLU, default to ONCE if not provided
+                    if (repeatPattern != null && !repeatPattern.isBlank()) {
+                        reminder.setRepeatPattern(repeatPattern.toUpperCase());
+                    } else {
+                        reminder.setRepeatPattern("ONCE");
+                    }
+                    
+                    retrofit2.Response<ReminderDTO> r = 
+                        RetrofitClient.api().createReminder(reminder).execute();
+                    
+                    if (r.isSuccessful()) {
+                        // Clear pending reminder context since it was successfully created
+                        sPendingReminderMessage = null;
+                        sPendingReminderTitle = null;
+                        sPendingReminderType = null;
+                        sPendingReminderPattern = null;
+                        sPendingReminderTimestamp = 0;
+                        
+                        String confirmMsg = (nres != null && nres.ack_tts != null && !nres.ack_tts.isBlank())
+                            ? nres.ack_tts
+                            : "Listo, te lo anoto.";
+                        sayViaWakeService(TtsSanitizer.sanitizeForTTS(confirmMsg), 0);
+                    } else {
+                        sayViaWakeService("No pude crear el recordatorio ahora.", 0);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error creating reminder", ex);
+                    sayViaWakeService("Tuve un problema creando el recordatorio.", 0);
+                }
+                stopSelf(); return;
+            }
+
+            case "QUERY_REMINDERS": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
+                try {
+                    Long elderlyId = userDataManager.getUserId();
+                    if (elderlyId == null) {
+                        sayViaWakeService("No pude identificar tu usuario.", 0);
+                        stopSelf(); return;
+                    }
+
+                    // Extract reminder type filter from slots
+                    String queryType = null;
+                    if (nres != null && nres.slots != null && nres.slots.query_reminder_type != null && !nres.slots.query_reminder_type.isEmpty()) {
+                        queryType = nres.slots.query_reminder_type;
+                    }
+
+                    retrofit2.Response<java.util.List<ReminderDTO>> r = 
+                        RetrofitClient.api().getTodayReminders(elderlyId, queryType).execute();
+                    
+                    if (r.isSuccessful() && r.body() != null && !r.body().isEmpty()) {
+                        // Build response message based on type
+                        String typeLabel = "";
+                        if ("medication".equalsIgnoreCase(queryType)) {
+                            typeLabel = "medicamentos";
+                        } else if ("appointment".equalsIgnoreCase(queryType)) {
+                            typeLabel = "citas";
+                        } else if ("event".equalsIgnoreCase(queryType)) {
+                            typeLabel = "eventos";
+                        } else {
+                            typeLabel = "recordatorios";
+                        }
+                        
+                        StringBuilder reply = new StringBuilder("Tenés los siguientes " + typeLabel + ": ");
+                        java.util.List<ReminderDTO> reminders = r.body();
+                        for (int i = 0; i < reminders.size(); i++) {
+                            ReminderDTO rem = reminders.get(i);
+                            String desc = rem.getDescription();
+                            if (desc == null || desc.isEmpty()) desc = rem.getTitle();
+                            reply.append(desc != null ? desc : "recordatorio");
+                            if (rem.getReminderTime() != null && !rem.getReminderTime().isEmpty()) {
+                                reply.append(", ").append(formatDateTimeForSpeech(rem.getReminderTime()));
+                            }
+                            if (i < reminders.size() - 1) {
+                                reply.append("; ");
+                            }
+                        }
+                        sayViaWakeService(TtsSanitizer.sanitizeForTTS(reply.toString()), 0);
+                    } else {
+                        String typeLabel = "";
+                        if ("medication".equalsIgnoreCase(queryType)) {
+                            typeLabel = "medicamentos";
+                        } else if ("appointment".equalsIgnoreCase(queryType)) {
+                            typeLabel = "citas";
+                        } else if ("event".equalsIgnoreCase(queryType)) {
+                            typeLabel = "eventos";
+                        } else {
+                            typeLabel = "recordatorios";
+                        }
+                        sayViaWakeService("No tenés " + typeLabel + " para hoy.", 0);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error querying reminders", ex);
+                    sayViaWakeService("No pude consultar los recordatorios ahora.", 0);
+                }
+                stopSelf(); return;
+            }
+
+            case "CONFIRM_MEDICATION": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
+                // Get last announced reminder from store
+                PendingReminderDTO lastReminder = PendingReminderStore.get().getLastAnnounced();
+                
+                if (lastReminder == null || lastReminder.getId() == null) {
+                    sayViaWakeService("No tengo un recordatorio pendiente para confirmar.", 0);
+                    stopSelf(); return;
+                }
+
+                try {
+                    Long elderlyId = userDataManager.getUserId();
+                    if (elderlyId == null) {
+                        sayViaWakeService("No pude identificar tu usuario.", 0);
+                        stopSelf(); return;
+                    }
+
+                    java.util.Map<String,String> body = new java.util.HashMap<>();
+                    body.put("notes", "Confirmado por voz");
+                    
+                    retrofit2.Response<Void> r = RetrofitClient.api()
+                        .recordMedicationTaken(lastReminder.getId(), elderlyId, body).execute();
+                    
+                    if (r.isSuccessful()) {
+                        String confirmMsg = (nres != null && nres.ack_tts != null && !nres.ack_tts.isBlank())
+                            ? nres.ack_tts
+                            : "Perfecto, lo registro.";
+                        sayViaWakeService(TtsSanitizer.sanitizeForTTS(confirmMsg), 0);
+                        PendingReminderStore.get().clearLastAnnounced();
+                    } else {
+                        sayViaWakeService("No pude registrar la confirmación.", 0);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error confirming medication", ex);
+                    sayViaWakeService("Tuve un problema registrando eso.", 0);
+                }
+                stopSelf(); return;
+            }
+
+            case "DENY_MEDICATION": {
+                if (FallSignals.isActive()) { stopSelf(); return; }
+                PendingReminderDTO lastReminder = PendingReminderStore.get().getLastAnnounced();
+                
+                if (lastReminder == null || lastReminder.getId() == null) {
+                    sayViaWakeService("No tengo un recordatorio pendiente.", 0);
+                    stopSelf(); return;
+                }
+
+                try {
+                    Long elderlyId = userDataManager.getUserId();
+                    if (elderlyId == null) {
+                        sayViaWakeService("No pude identificar tu usuario.", 0);
+                        stopSelf(); return;
+                    }
+
+                    java.util.Map<String,String> body = new java.util.HashMap<>();
+                    body.put("notes", "Omitido por voz");
+                    
+                    retrofit2.Response<Void> r = RetrofitClient.api()
+                        .recordMedicationSkipped(lastReminder.getId(), elderlyId, body).execute();
+                    
+                    if (r.isSuccessful()) {
+                        String confirmMsg = (nres != null && nres.ack_tts != null && !nres.ack_tts.isBlank())
+                            ? nres.ack_tts
+                            : "Bueno, avisame cuando la tomes.";
+                        sayViaWakeService(TtsSanitizer.sanitizeForTTS(confirmMsg), 0);
+                        PendingReminderStore.get().clearLastAnnounced();
+                    } else {
+                        sayViaWakeService("Entendido.", 0);
+                        PendingReminderStore.get().clearLastAnnounced();
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error marking skipped", ex);
+                    sayViaWakeService("Entendido.", 0);
+                    PendingReminderStore.get().clearLastAnnounced();
+                }
+                stopSelf(); return;
+            }
+
             case "ANSWER":
             case "UNKNOWN":
             default: {
                 if (FallSignals.isActive()) { stopSelf(); return; }
+                
                 boolean backendUp = true;
                 try { backendUp = com.example.toto_app.services.BackendHealthManager.get().isBackendUp(); } catch (Throwable ignore) { backendUp = true; }
+                
                 if (!backendUp) {
-                    // Cuando el backend está caído, evitamos decir "No estoy seguro" y ofrecemos intentar localmente
+                    // Backend caído - usar lógica local para detectar caídas
+                    if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
+                        sayThenListenHere("¿Estás bien?", "AWAIT:0");
+                        stopSelf();
+                        return;
+                    }
+                    
                     String offlineReply = "No hay conexión al servidor. Volvé a intentar más tarde.";
                     sayViaWakeService(TtsSanitizer.sanitizeForTTS(offlineReply), 0);
-                    stopSelf(); return;
+                    stopSelf(); 
+                    return;
                 }
+                
+                // Backend levantado - intentar con conversación general
                 try {
                     AskRequest rq = new AskRequest();
                     rq.prompt = transcript;
-                    rq.userId = userDataManager.getUserName();  // Enviar el nombre del usuario para memoria de conversación
+                    rq.userId = userDataManager.getUserName();
                     Response<AskResponse> r2 = RetrofitClient.api().ask(rq).execute();
                     String reply = (r2.isSuccessful() && r2.body() != null && r2.body().reply != null)
                             ? r2.body().reply.trim()
@@ -854,6 +1131,14 @@ public class InstructionService extends android.app.Service {
                     sayViaWakeService(TtsSanitizer.sanitizeForTTS(reply), 0);
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/ask", ex);
+                    
+                    // Si falla el /api/ask, verificar si podría ser una caída
+                    if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
+                        sayThenListenHere("¿Estás bien?", "AWAIT:0");
+                        stopSelf();
+                        return;
+                    }
+                    
                     sayViaWakeService("Tuve un problema procesando eso.", 0);
                 }
                 stopSelf(); return;
@@ -870,6 +1155,16 @@ public class InstructionService extends android.app.Service {
         if (nextFallMode != null) {
             say.putExtra(WakeWordService.EXTRA_AFTER_SAY_FALL_MODE, nextFallMode);
         }
+        androidx.core.content.ContextCompat.startForegroundService(this, say);
+    }
+
+    private void sayThenListen(String text) {
+        // Say the text and then activate microphone for immediate listening (without requiring wake word)
+        Intent say = new Intent(this, WakeWordService.class)
+                .setAction(WakeWordService.ACTION_SAY)
+                .putExtra("text", text)
+                .putExtra(WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true)
+                .putExtra(WakeWordService.EXTRA_AFTER_SAY_USER_NAME, userDataManager.getUserName());
         androidx.core.content.ContextCompat.startForegroundService(this, say);
     }
 
@@ -966,12 +1261,22 @@ public class InstructionService extends android.app.Service {
 
     private static String slotsToString(NluRouteResponse.Slots s) {
         if (s == null) return "{}";
-        return "{contact=" + safe(s.contact_query) +
-                ", hour=" + s.hour +
-                ", minute=" + s.minute +
-                ", dt=" + safe(s.datetime_iso) +
-                ", msg=" + safe(s.message_text) +
-                ", app=" + safe(s.app_name) + "}";
+        StringBuilder sb = new StringBuilder("{contact=").append(safe(s.contact_query))
+                .append(", hour=").append(s.hour)
+                .append(", minute=").append(s.minute)
+                .append(", dt=").append(safe(s.datetime_iso))
+                .append(", msg=").append(safe(s.message_text))
+                .append(", app=").append(safe(s.app_name));
+        
+        // Add reminder-specific fields if present
+        if (s.reminder_title != null || s.reminder_type != null || s.repeat_pattern != null || s.query_reminder_type != null) {
+            sb.append(", rem_title=").append(safe(s.reminder_title))
+              .append(", rem_type=").append(safe(s.reminder_type))
+              .append(", repeat=").append(safe(s.repeat_pattern))
+              .append(", query_type=").append(safe(s.query_reminder_type));
+        }
+        
+        return sb.append("}").toString();
     }
 
     private static boolean looksLikePhoneNumber(String s) {
@@ -983,6 +1288,98 @@ public class InstructionService extends android.app.Service {
     private static String normalizeDialable(String s) {
         if (s == null) return "";
         return s.replaceAll("[^0-9+]", "");
+    }
+
+    private static String formatTimeForBackend(int hour, int minute) {
+        // Create LocalDateTime for today at the specified time
+        java.util.Calendar now = java.util.Calendar.getInstance();
+        java.util.Calendar reminderCal = java.util.Calendar.getInstance();
+        reminderCal.set(java.util.Calendar.HOUR_OF_DAY, hour);
+        reminderCal.set(java.util.Calendar.MINUTE, minute);
+        reminderCal.set(java.util.Calendar.SECOND, 0);
+        reminderCal.set(java.util.Calendar.MILLISECOND, 0);
+        
+        // If the time has already passed today, schedule for tomorrow
+        if (reminderCal.before(now)) {
+            reminderCal.add(java.util.Calendar.DAY_OF_MONTH, 1);
+        }
+        
+        // Format as ISO 8601: yyyy-MM-dd'T'HH:mm:ss
+        return String.format(Locale.US, "%04d-%02d-%02dT%02d:%02d:%02d",
+                reminderCal.get(java.util.Calendar.YEAR),
+                reminderCal.get(java.util.Calendar.MONTH) + 1, // Month is 0-indexed
+                reminderCal.get(java.util.Calendar.DAY_OF_MONTH),
+                reminderCal.get(java.util.Calendar.HOUR_OF_DAY),
+                reminderCal.get(java.util.Calendar.MINUTE),
+                reminderCal.get(java.util.Calendar.SECOND));
+    }
+
+    private static String formatTimeForSpeech(String time) {
+        // Convert "14:30:00" to "14:30" or "2:30 PM"
+        if (time == null || time.isEmpty()) return "";
+        String[] parts = time.split(":");
+        if (parts.length >= 2) {
+            try {
+                int h = Integer.parseInt(parts[0]);
+                int m = Integer.parseInt(parts[1]);
+                return DeviceActions.hhmm(h, m);
+            } catch (NumberFormatException e) {
+                return time;
+            }
+        }
+        return time;
+    }
+
+    private static String formatDateTimeForSpeech(String isoDateTime) {
+        // Convert "2025-11-03T14:30:00" to "el día 3 a las 14:30"
+        if (isoDateTime == null || isoDateTime.isEmpty()) return "";
+        
+        try {
+            // Parse ISO datetime: yyyy-MM-dd'T'HH:mm:ss
+            String[] parts = isoDateTime.split("T");
+            if (parts.length < 2) return isoDateTime;
+            
+            String datePart = parts[0]; // "2025-11-03"
+            String timePart = parts[1]; // "14:30:00"
+            
+            // Extract date components
+            String[] dateComponents = datePart.split("-");
+            if (dateComponents.length < 3) return isoDateTime;
+            
+            int year = Integer.parseInt(dateComponents[0]);
+            int month = Integer.parseInt(dateComponents[1]);
+            int day = Integer.parseInt(dateComponents[2]);
+            
+            // Check if it's today
+            java.util.Calendar now = java.util.Calendar.getInstance();
+            java.util.Calendar reminderDate = java.util.Calendar.getInstance();
+            reminderDate.set(year, month - 1, day); // month is 0-indexed in Calendar
+            
+            boolean isToday = now.get(java.util.Calendar.YEAR) == reminderDate.get(java.util.Calendar.YEAR) &&
+                             now.get(java.util.Calendar.DAY_OF_YEAR) == reminderDate.get(java.util.Calendar.DAY_OF_YEAR);
+            
+            // Format time
+            String[] timeComponents = timePart.split(":");
+            if (timeComponents.length < 2) return isoDateTime;
+            
+            int hour = Integer.parseInt(timeComponents[0]);
+            int minute = Integer.parseInt(timeComponents[1]);
+            String timeStr = DeviceActions.hhmm(hour, minute);
+            
+            // Build speech string
+            if (isToday) {
+                return "a las " + timeStr;
+            } else {
+                // Get day name
+                String[] dayNames = {"domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"};
+                int dayOfWeek = reminderDate.get(java.util.Calendar.DAY_OF_WEEK) - 1;
+                String dayName = dayNames[dayOfWeek];
+                
+                return "el " + dayName + " " + day + " a las " + timeStr;
+            }
+        } catch (Exception e) {
+            return isoDateTime;
+        }
     }
 
     private static final class FallbackMessage {
