@@ -148,10 +148,9 @@ public class InstructionService extends android.app.Service {
                     sayThenListenHere("No te escuché. ¿Estás bien?", "AWAIT:1");
                 } else {
                     int res = sendEmergencyToAllContacts();
-                    String emergencyName = userDataManager.getEmergencyContactName();
                     if (res == 0) sayViaWakeService("No te escuché. Ya avisé a tus contactos de emergencia.", 0);
-                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
-                    else sayViaWakeService("No te escuché y no pude avisar a tus contactos.", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. En cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
+                    else sayViaWakeService("No te escuché. Tuve algunos inconvenientes para avisar a tus contactos.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -202,8 +201,8 @@ public class InstructionService extends android.app.Service {
                 } else {
                     int res = sendEmergencyToAllContacts();
                     if (res == 0) sayViaWakeService("No te escuché. Ya avisé a tus contactos de emergencia.", 0);
-                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
-                    else sayViaWakeService("No te escuché y no pude avisar a tus contactos.", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. En cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
+                    else sayViaWakeService("No te escuché. Tuve algunos inconvenientes para avisar a tus contactos.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -221,8 +220,8 @@ public class InstructionService extends android.app.Service {
                 case HELP: {
                     int res = sendEmergencyToAllContacts();
                     if (res == 0) sayViaWakeService("Ya avisé a tus contactos de emergencia.", 0);
-                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. No te preocupes, en cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
-                    else    sayViaWakeService("Quise avisar a tus contactos pero no pude enviar los mensajes.", 0);
+                    else if (res == 1) sayViaWakeService("No hay conexión al servidor. En cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
+                    else sayViaWakeService("Tuve algunos inconvenientes para avisar a tus contactos.", 0);
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
