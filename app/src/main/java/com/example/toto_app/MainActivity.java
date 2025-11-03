@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.Toast;
 
@@ -26,6 +27,7 @@ import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.services.FallDetectionService;
 import com.example.toto_app.services.WakeWordService;
 import com.example.toto_app.util.TokenManager;
+import com.example.toto_app.util.UserDataManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -39,8 +41,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_IGNORE_BATTERY  = 2001;
     private static final int REQ_ROLE_DIALER     = 5001;
 
-    private String userName = "Juan";
     private TokenManager tokenManager;
+    private UserDataManager userDataManager;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -57,6 +59,21 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         
+        // Initialize UserDataManager and load user data from backend
+        userDataManager = new UserDataManager(this);
+        userDataManager.loadUserData(new UserDataManager.UserDataCallback() {
+            @Override
+            public void onSuccess() {
+                Log.d("MainActivity", "User data loaded: " + userDataManager.getUserName());
+            }
+
+            @Override
+            public void onError(String message) {
+                Log.e("MainActivity", "Error loading user data: " + message);
+                Toast.makeText(MainActivity.this, "Error cargando datos del usuario", Toast.LENGTH_SHORT).show();
+            }
+        });
+        
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
 
@@ -68,7 +85,7 @@ public class MainActivity extends AppCompatActivity {
             // Muy importante para limitarlo a tu propia app
             i.setPackage(getPackageName());
             i.putExtra(FallSignals.EXTRA_SOURCE, "ui_button");
-            i.putExtra(FallSignals.EXTRA_USER_NAME, "Juan");
+            i.putExtra(FallSignals.EXTRA_USER_NAME, userDataManager.getUserName());
             sendBroadcast(i);
         });
 
@@ -118,7 +135,10 @@ public class MainActivity extends AppCompatActivity {
                         stopService(new Intent(this, WakeWordService.class));
                         stopService(new Intent(this, FallDetectionService.class));
                         
+                        // Clear tokens and user data
                         tokenManager.clearTokens();
+                        userDataManager.clear();
+                        
                         Intent intent = new Intent(this, LoginActivity.class);
                         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                         startActivity(intent);
@@ -211,7 +231,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void startWakeWordService() {
         Intent i = new Intent(this, WakeWordService.class);
-        i.putExtra("user_name", userName);
         ContextCompat.startForegroundService(this, i);
         Toast.makeText(this, "Escuchando \"Toto\" en segundo plano", Toast.LENGTH_SHORT).show();
     }

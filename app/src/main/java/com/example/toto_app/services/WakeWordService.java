@@ -41,6 +41,7 @@ import java.util.regex.Pattern;
 
 import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.util.TtsSanitizer;
+import com.example.toto_app.util.UserDataManager;
 
 public class WakeWordService extends Service implements RecognitionListener {
 
@@ -86,7 +87,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     private String lastDetectionText = "";
     private volatile boolean triggered = false;
 
-    private String userName = "Juan";
+    private UserDataManager userDataManager;
 
     private Model model;
     private SpeechService speechService;
@@ -203,6 +204,9 @@ public class WakeWordService extends Service implements RecognitionListener {
     @Override
     public void onCreate() {
         super.onCreate();
+        
+        // Initialize UserDataManager
+        userDataManager = new UserDataManager(getApplicationContext());
 
         IntentFilter filter = new IntentFilter(ACTION_CMD_FINISHED);
         // Usar ContextCompat.registerReceiver para manejar flags en todas las APIs
@@ -408,7 +412,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void startInstructionService() {
         stopListening();
         Intent i = new Intent(this, InstructionService.class);
-        i.putExtra("user_name", userName);
+        i.putExtra("user_name", userDataManager.getUserName());
         startService(i); // Servicio normal, NO FGS
     }
 
@@ -709,7 +713,7 @@ public class WakeWordService extends Service implements RecognitionListener {
 
         if (ttsReady && tts != null) {
             String template = ACK_TEMPLATES[rng.nextInt(ACK_TEMPLATES.length)];
-            String text = String.format(Locale.getDefault(), template, userName);
+            String text = String.format(Locale.getDefault(), template, userDataManager.getUserName());
             String s = TtsSanitizer.sanitizeForTTS(text);
 
             Bundle params = new Bundle();

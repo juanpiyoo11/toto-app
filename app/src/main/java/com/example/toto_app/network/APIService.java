@@ -34,6 +34,13 @@ public interface APIService {
     @POST("api/auth/refresh")
     Call<LoginResponse> refreshToken(@Body RefreshTokenRequest request);
 
+    // User profile endpoints
+    @GET("api/user/profile")
+    Call<UserProfileDTO> getUserProfile();
+    
+    @GET("api/user/emergency-contacts")
+    Call<List<EmergencyContactDTO>> getEmergencyContacts();
+
     // Contact endpoints
     @GET("api/contacts")
     Call<List<ContactDTO>> getContacts(@Query("elderlyId") Long elderlyId);
