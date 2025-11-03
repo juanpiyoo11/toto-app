@@ -21,13 +21,13 @@ public class AuthInterceptor implements Interceptor {
         Request originalRequest = chain.request();
         String accessToken = tokenManager.getAccessToken();
 
-        // Skip auth for login/register endpoints
+        // Skip auth ONLY for public endpoints (login/register)
         String path = originalRequest.url().encodedPath();
-        if (path.contains("/auth/login") || path.contains("/auth/register") || path.contains("/auth/refresh")) {
+        if (path.contains("/api/auth/")) {
             return chain.proceed(originalRequest);
         }
 
-        // Add Authorization header if token exists
+        // Add Authorization header if token exists for ALL other endpoints
         if (accessToken != null && !accessToken.isEmpty()) {
             Request authenticatedRequest = originalRequest.newBuilder()
                     .header("Authorization", "Bearer " + accessToken)
@@ -35,6 +35,7 @@ public class AuthInterceptor implements Interceptor {
             return chain.proceed(authenticatedRequest);
         }
 
+        // If no token, proceed anyway (backend will handle 401/403)
         return chain.proceed(originalRequest);
     }
 }

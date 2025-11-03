@@ -25,6 +25,9 @@ public interface APIService {
     @POST("api/auth/login")
     Call<LoginResponse> login(@Body LoginRequest request);
 
+    @POST("api/auth/login-token")
+    Call<LoginResponse> loginWithToken(@Body TokenLoginRequest request);
+
     @POST("api/auth/register")
     Call<LoginResponse> register(@Body RegisterRequest request);
 

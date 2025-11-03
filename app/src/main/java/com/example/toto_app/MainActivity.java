@@ -25,6 +25,7 @@ import androidx.core.content.ContextCompat;
 import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.services.FallDetectionService;
 import com.example.toto_app.services.WakeWordService;
+import com.example.toto_app.util.TokenManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -39,10 +40,23 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_ROLE_DIALER     = 5001;
 
     private String userName = "Juan";
+    private TokenManager tokenManager;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        
+        // Check if user is logged in
+        tokenManager = new TokenManager(this);
+        if (tokenManager.getAccessToken() == null || tokenManager.getAccessToken().isEmpty()) {
+            // Not logged in, redirect to login
+            Intent intent = new Intent(this, LoginActivity.class);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            startActivity(intent);
+            finish();
+            return;
+        }
+        
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
 
@@ -92,6 +106,26 @@ public class MainActivity extends AppCompatActivity {
         btnStopTts.setOnClickListener(v -> {
             Intent i = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_STOP_TTS);
             startService(i);
+        });
+
+        Button btnLogout = findViewById(R.id.btnLogout);
+        btnLogout.setOnClickListener(v -> {
+            new AlertDialog.Builder(this)
+                    .setTitle("Cerrar sesión")
+                    .setMessage("¿Estás seguro que querés cerrar sesión?")
+                    .setPositiveButton("Sí", (dialog, which) -> {
+                        // Stop services before logout
+                        stopService(new Intent(this, WakeWordService.class));
+                        stopService(new Intent(this, FallDetectionService.class));
+                        
+                        tokenManager.clearTokens();
+                        Intent intent = new Intent(this, LoginActivity.class);
+                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                        startActivity(intent);
+                        finish();
+                    })
+                    .setNegativeButton("No", null)
+                    .show();
         });
 
         Button btnNotif = findViewById(R.id.btnNotifAccess);

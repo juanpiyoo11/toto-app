@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat;
 
 import com.example.toto_app.services.FallDetectionService;
 import com.example.toto_app.services.WakeWordService;
+import com.example.toto_app.util.TokenManager;
 
 public class AutoStartReceiver extends BroadcastReceiver {
 
@@ -22,6 +23,15 @@ public class AutoStartReceiver extends BroadcastReceiver {
         boolean replaced = action.equals(Intent.ACTION_MY_PACKAGE_REPLACED);
 
         if (boot || replaced) {
+            // Check if user is authenticated before starting services
+            TokenManager tokenManager = new TokenManager(context);
+            String accessToken = tokenManager.getAccessToken();
+            
+            if (accessToken == null || accessToken.isEmpty()) {
+                // User not authenticated, don't start services
+                return;
+            }
+            
             // Solo si ya tenemos permiso de micrófono (no se puede pedir en background)
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                     == PackageManager.PERMISSION_GRANTED) {

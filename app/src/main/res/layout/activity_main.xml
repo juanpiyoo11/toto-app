@@ -50,4 +50,13 @@
         android:text="Cortar voz (TTS)"
         android:layout_marginTop="12dp"/>
 
+    <Button
+        android:id="@+id/btnLogout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Cerrar sesión"
+        android:layout_marginTop="24dp"
+        android:backgroundTint="#D32F2F"
+        android:textColor="#FFFFFF"/>
+
 </LinearLayout>
