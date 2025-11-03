@@ -190,7 +190,7 @@ public class WakeWordService extends Service implements RecognitionListener {
             Intent pause = new Intent(WakeWordService.this, WakeWordService.class).setAction(ACTION_PAUSE_LISTEN);
             androidx.core.content.ContextCompat.startForegroundService(WakeWordService.this, pause);
 
-            String who = (un == null || un.trim().isEmpty()) ? userName : un.trim();
+            String who = (un == null || un.trim().isEmpty()) ? userDataManager.getUserName() : un.trim();
             Intent say = new Intent(WakeWordService.this, WakeWordService.class)
                     .setAction(ACTION_SAY)
                     .putExtra("text", "Escuché un golpe. ¿Estás bien?")
@@ -504,13 +504,6 @@ public class WakeWordService extends Service implements RecognitionListener {
                 maybeSpeakPendingWhatsApp();
                 rearmWake();
                 return START_STICKY;
-            }
-
-            if (intent.hasExtra("user_name")) {
-                String incoming = intent.getStringExtra("user_name");
-                if (incoming != null && !incoming.trim().isEmpty()) {
-                    userName = incoming.trim();
-                }
             }
         }
         return START_STICKY;

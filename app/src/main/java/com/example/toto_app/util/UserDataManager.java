@@ -126,19 +126,21 @@ public class UserDataManager {
     }
     
     public String getUserName() {
-        return userName != null ? userName : "Usuario";
+        // Always read fresh from preferences to get latest value
+        String name = prefs.getString(KEY_USER_NAME, "Usuario");
+        return name != null ? name : "Usuario";
     }
     
     public String getUserPhone() {
-        return userPhone;
+        return prefs.getString(KEY_USER_PHONE, userPhone);
     }
     
     public String getEmergencyContactName() {
-        return emergencyContactName;
+        return prefs.getString(KEY_EMERGENCY_NAME, emergencyContactName);
     }
     
     public String getEmergencyContactPhone() {
-        return emergencyContactPhone;
+        return prefs.getString(KEY_EMERGENCY_PHONE, emergencyContactPhone);
     }
     
     public boolean hasEmergencyContact() {
