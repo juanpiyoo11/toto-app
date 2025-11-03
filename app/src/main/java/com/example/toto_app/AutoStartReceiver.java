@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import androidx.core.content.ContextCompat;
 
 import com.example.toto_app.services.FallDetectionService;
+import com.example.toto_app.services.ReminderPollingService;
 import com.example.toto_app.services.WakeWordService;
 import com.example.toto_app.util.TokenManager;
 
@@ -41,6 +42,9 @@ public class AutoStartReceiver extends BroadcastReceiver {
 
                 Intent yf = new Intent(context, FallDetectionService.class);
                 ContextCompat.startForegroundService(context, yf);
+                
+                Intent rp = new Intent(context, ReminderPollingService.class);
+                context.startService(rp);
             }
         }
     }

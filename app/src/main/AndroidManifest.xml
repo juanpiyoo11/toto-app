@@ -79,6 +79,10 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <service
+            android:name="com.example.toto_app.services.ReminderPollingService"
+            android:exported="false" />
+
         <receiver
             android:name="com.example.toto_app.AutoStartReceiver"
             android:exported="true"

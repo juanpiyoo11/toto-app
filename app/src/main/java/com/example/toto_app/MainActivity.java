@@ -134,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
                         // Stop services before logout
                         stopService(new Intent(this, WakeWordService.class));
                         stopService(new Intent(this, FallDetectionService.class));
+                        stopService(new Intent(this, com.example.toto_app.services.ReminderPollingService.class));
                         
                         // Clear tokens and user data
                         tokenManager.clearTokens();
@@ -211,6 +212,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             startWakeWordService();
             startFallDetectionService();
+            startReminderPollingService();
             maybeRequestIgnoreBatteryOptimizations();
             maybeRequestDefaultDialerRole();
         }
@@ -242,6 +244,12 @@ public class MainActivity extends AppCompatActivity {
         } else {
             startService(svc);
         }
+    }
+
+    private void startReminderPollingService() {
+        Intent svc = new Intent(this, com.example.toto_app.services.ReminderPollingService.class);
+        startService(svc);
+        Log.d("MainActivity", "ReminderPollingService started");
     }
 
     private void maybeRequestIgnoreBatteryOptimizations() {
@@ -280,6 +288,7 @@ public class MainActivity extends AppCompatActivity {
             if (micOk) {
                 startWakeWordService();
                 startFallDetectionService();
+                startReminderPollingService();
                 maybeRequestIgnoreBatteryOptimizations();
                 maybeRequestDefaultDialerRole();
 
