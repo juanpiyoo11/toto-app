@@ -1114,10 +1114,7 @@ public class InstructionService extends android.app.Service {
                         .recordMedicationTaken(lastReminder.getId(), elderlyId, body).execute();
                     
                     if (r.isSuccessful()) {
-                        String confirmMsg = (nres != null && nres.ack_tts != null && !nres.ack_tts.isBlank())
-                            ? nres.ack_tts
-                            : "Perfecto, lo registro.";
-                        sayViaWakeService(TtsSanitizer.sanitizeForTTS(confirmMsg), 0);
+                        sayViaWakeService("Perfecto, lo registro.", 0);
                         PendingReminderStore.get().clearLastAnnounced();
                     } else {
                         sayViaWakeService("No pude registrar la confirmación.", 0);
@@ -1152,19 +1149,14 @@ public class InstructionService extends android.app.Service {
                         .recordMedicationSkipped(lastReminder.getId(), elderlyId, body).execute();
                     
                     if (r.isSuccessful()) {
-                        String confirmMsg = (nres != null && nres.ack_tts != null && !nres.ack_tts.isBlank())
-                            ? nres.ack_tts
-                            : "Bueno, avisame cuando la tomes.";
-                        sayViaWakeService(TtsSanitizer.sanitizeForTTS(confirmMsg), 0);
-                        PendingReminderStore.get().clearLastAnnounced();
+                        // Don't clear - user might still confirm later
+                        sayViaWakeService("Bueno, avisame cuando la tomes.", 0);
                     } else {
                         sayViaWakeService("Entendido.", 0);
-                        PendingReminderStore.get().clearLastAnnounced();
                     }
                 } catch (Exception ex) {
                     Log.e(TAG, "Error marking skipped", ex);
                     sayViaWakeService("Entendido.", 0);
-                    PendingReminderStore.get().clearLastAnnounced();
                 }
                 stopSelf(); return;
             }
