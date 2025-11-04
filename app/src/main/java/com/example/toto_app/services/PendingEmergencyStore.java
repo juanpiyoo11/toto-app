@@ -56,6 +56,7 @@ public final class PendingEmergencyStore {
      */
     public void flushPendingNow() {
         synchronized (lock) {
+            int sentCount = 0;
             Iterator<Item> it = list.iterator();
             while (it.hasNext()) {
                 Item itx = it.next();
@@ -64,34 +65,38 @@ public final class PendingEmergencyStore {
                     if (ok) {
                         Log.i(TAG, "Sent queued emergency to " + itx.numberE164);
                         it.remove();
-                        // notificar al usuario que se envió (local notification + TTS)
+                        sentCount++;
+                        // Solo notificación visual, el TTS lo hacemos una vez al final
                         try {
                             NotificationService.simpleActionNotification(
                                     AppContext.get(),
                                     "Toto: Mensaje de emergencia enviado",
                                     "Se envió el mensaje de emergencia a " + itx.numberE164 + " al recuperar la conexión.",
                                     null);
-                            // Ask WakeWordService to speak (enqueue if busy) the confirmation message.
-                            try {
-                                Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> starting WakeWordService ACTION_SAY (enqueue) for " + itx.numberE164);
-                                android.content.Intent say = new android.content.Intent(AppContext.get(), com.example.toto_app.services.WakeWordService.class)
-                                        .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
-                                        .putExtra("text", "Recuperé la conexión. Envié el mensaje de emergencia.")
-                                        .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
-                                androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), say);
-                            } catch (Exception ignore) {
-                                // fallback to broadcast
-                                try {
-                                    Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> startForegroundService failed, broadcasting ACTION_PENDING_SENT");
-                                    android.content.Intent b = new android.content.Intent("com.example.toto_app.ACTION_PENDING_SENT");
-                                    b.putExtra("text", "Recuperé la conexión. Envié el mensaje de emergencia.");
-                                    AppContext.get().sendBroadcast(b);
-                                } catch (Exception ignore2) {}
-                            }
                         } catch (Exception ignore) { }
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Error sending queued emergency", e);
+                }
+            }
+
+            // Si se envió al menos uno, hablar UNA SOLA VEZ
+            if (sentCount > 0) {
+                try {
+                    Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> sent " + sentCount + " message(s), speaking once");
+                    android.content.Intent say = new android.content.Intent(AppContext.get(), com.example.toto_app.services.WakeWordService.class)
+                            .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
+                            .putExtra("text", "Recuperé la conexión. Envié el mensaje de emergencia.")
+                            .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
+                    androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), say);
+                } catch (Exception ignore) {
+                    // fallback to broadcast
+                    try {
+                        Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> startForegroundService failed, broadcasting ACTION_PENDING_SENT");
+                        android.content.Intent b = new android.content.Intent("com.example.toto_app.ACTION_PENDING_SENT");
+                        b.putExtra("text", "Recuperé la conexión. Envié el mensaje de emergencia.");
+                        AppContext.get().sendBroadcast(b);
+                    } catch (Exception ignore2) {}
                 }
             }
         }

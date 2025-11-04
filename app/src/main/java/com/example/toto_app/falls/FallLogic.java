@@ -166,7 +166,7 @@ public final class FallLogic {
     }
 
     /**
-     * Result codes: 0=sent, 1=queued (backend down), 2=failed
+     * Result codes: 0=sent, 1=queued (backend down/network error), 2=failed (other error like 409)
      */
     public static int sendEmergencyMessageToResult(String numberE164, String userName) {
         try {
@@ -181,10 +181,19 @@ public final class FallLogic {
                     || "ok_template".equalsIgnoreCase(wbody.status)
                     || (wbody.id != null && !wbody.id.trim().isEmpty()));
             if (ok) return 0;
-            // si la respuesta no fue ok consideramos que hay algún problema de backend (queue)
-            PendingEmergencyStore.get().add(numberE164, userName);
-            try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
-            return 1;
+            
+            // Check if it's a server error, 404 (server down), 5xx, or network issue vs client error (like 409)
+            int code = wresp.code();
+            if (code >= 500 || code == 0 || code == 404) {
+                // Server error, 404 (backend down), or network error -> queue for retry
+                PendingEmergencyStore.get().add(numberE164, userName);
+                try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
+                return 1;
+            } else {
+                // Client error (4xx like 409 recipient not allowed) -> don't queue, it won't work on retry
+                Log.w("FallLogic", "Client error " + code + " sending to " + to + " - not queuing");
+                return 2;
+            }
         } catch (Exception ex) {
             Log.e("FallLogic", "Error enviando WhatsApp a emergencia", ex);
             try {
@@ -193,5 +202,27 @@ public final class FallLogic {
             try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
             return 1;
         }
+    }
+
+    /**
+     * Send emergency message to multiple contacts.
+     * Returns: 0=all sent, 1=some queued (network/server error), 2=some failed (client errors)
+     */
+    public static int sendEmergencyMessageToMultiple(java.util.List<String> phoneNumbers, String userName) {
+        if (phoneNumbers == null || phoneNumbers.isEmpty()) return 2;
+        
+        int worstResult = 0;
+        int sentCount = 0;
+        
+        for (String phone : phoneNumbers) {
+            if (phone == null || phone.trim().isEmpty()) continue;
+            
+            int result = sendEmergencyMessageToResult(phone, userName);
+            if (result > worstResult) worstResult = result;
+            if (result == 0) sentCount++;
+        }
+        
+        Log.d("FallLogic", "Emergency messages: " + sentCount + " sent / " + phoneNumbers.size() + " total");
+        return worstResult;
     }
 }

@@ -2,26 +2,129 @@ package com.example.toto_app.network;
 
 import com.google.gson.JsonObject;
 
+import java.util.List;
 import java.util.Map;
 
 import okhttp3.MultipartBody;
 import okhttp3.RequestBody;
 import retrofit2.Call;
 import retrofit2.http.Body;
+import retrofit2.http.DELETE;
 import retrofit2.http.GET;
+import retrofit2.http.HTTP;
 import retrofit2.http.Multipart;
+import retrofit2.http.PATCH;
 import retrofit2.http.POST;
+import retrofit2.http.PUT;
 import retrofit2.http.Part;
+import retrofit2.http.Path;
+import retrofit2.http.Query;
 
 public interface APIService {
 
+    // Authentication endpoints
+    @POST("api/auth/login")
+    Call<LoginResponse> login(@Body LoginRequest request);
+
+    @POST("api/auth/login-token")
+    Call<LoginResponse> loginWithToken(@Body TokenLoginRequest request);
+
+    @POST("api/auth/register")
+    Call<LoginResponse> register(@Body RegisterRequest request);
+
+    @POST("api/auth/refresh")
+    Call<LoginResponse> refreshToken(@Body RefreshTokenRequest request);
+
+    // User profile endpoints
+    @GET("api/user/profile")
+    Call<UserProfileDTO> getUserProfile();
+    
+    @GET("api/user/emergency-contacts")
+    Call<List<EmergencyContactDTO>> getEmergencyContacts();
+
+    // Contact endpoints
+    @GET("api/contacts")
+    Call<List<ContactDTO>> getContacts(@Query("elderlyId") Long elderlyId);
+
+    @GET("api/contacts/{id}")
+    Call<ContactDTO> getContactById(@Path("id") Long id);
+
+    @POST("api/contacts")
+    Call<ContactDTO> createContact(@Body ContactDTO contact);
+
+    @PUT("api/contacts/{id}")
+    Call<ContactDTO> updateContact(@Path("id") Long id, @Body ContactDTO contact);
+
+    @DELETE("api/contacts/{id}")
+    Call<Void> deleteContact(@Path("id") Long id);
+
+    // Reminder endpoints
+    @GET("api/reminders")
+    Call<List<ReminderDTO>> getReminders(
+            @Query("elderlyId") Long elderlyId,
+            @Query("activeOnly") Boolean activeOnly);
+
+    @GET("api/reminders/{id}")
+    Call<ReminderDTO> getReminderById(@Path("id") Long id);
+
+    @POST("api/reminders")
+    Call<ReminderDTO> createReminder(@Body ReminderDTO reminder);
+
+    @PUT("api/reminders/{id}")
+    Call<ReminderDTO> updateReminder(@Path("id") Long id, @Body ReminderDTO reminder);
+
+    @PATCH("api/reminders/{id}/toggle")
+    Call<ReminderDTO> toggleReminderActive(@Path("id") Long id);
+
+    @DELETE("api/reminders/{id}")
+    Call<Void> deleteReminder(@Path("id") Long id);
+
+    @GET("api/reminders/pending")
+    Call<List<PendingReminderDTO>> getPendingReminders(@Query("elderlyId") Long elderlyId);
+
+    @POST("api/reminders/{id}/announced")
+    Call<Void> markReminderAnnounced(@Path("id") Long id, @Query("elderlyId") Long elderlyId);
+
+    @POST("api/reminders/{id}/taken")
+    Call<Void> recordMedicationTaken(@Path("id") Long id, @Query("elderlyId") Long elderlyId, @Body Map<String, String> body);
+
+    @POST("api/reminders/{id}/skipped")
+    Call<Void> recordMedicationSkipped(@Path("id") Long id, @Query("elderlyId") Long elderlyId, @Body Map<String, String> body);
+
+    @GET("api/reminders/today")
+    Call<List<ReminderDTO>> getTodayReminders(
+            @Query("elderlyId") Long elderlyId, 
+            @Query("type") String type,
+            @Query("date") String date);
+
+    @HTTP(method = "DELETE", path = "api/reminders/search", hasBody = false)
+    Call<Map<String, Object>> deleteRemindersByCriteria(
+            @Query("elderlyId") Long elderlyId,
+            @Query("title") String title,
+            @Query("hour") Integer hour,
+            @Query("minute") Integer minute,
+            @Query("type") String type);
+
+    // History endpoints
+    @GET("api/history")
+    Call<List<HistoryEventDTO>> getHistory(
+            @Query("userId") Long userId,
+            @Query("start") String start,
+            @Query("end") String end);
+
+    @GET("api/history/{id}")
+    Call<HistoryEventDTO> getHistoryEventById(@Path("id") Long id);
+
+    @POST("api/history")
+    Call<HistoryEventDTO> createHistoryEvent(@Body HistoryEventDTO event);
+
+    // Existing endpoints
     @Multipart
     @POST("api/stt")
     Call<TranscriptionResponse> transcribe(
             @Part MultipartBody.Part audio,
             @Part("language") RequestBody language,
-            @Part("userName") RequestBody userName
-    );
+            @Part("userName") RequestBody userName);
 
     @POST("api/ask")
     Call<AskResponse> ask(@Body AskRequest body);

@@ -19,6 +19,7 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
 import com.example.toto_app.falls.STFT;
+import com.example.toto_app.util.UserDataManager;
 
 import org.tensorflow.lite.support.audio.TensorAudio;
 import org.tensorflow.lite.support.label.Category;
@@ -276,18 +277,18 @@ public class FallDetectionService extends Service {
 
                 String path = passBassy ? "LF" : (passFarField ? "FF" : "--");
 
-                Log.d(TAG,
-                        "Top=" + topLabel + " (" + String.format("%.2f", topScore) + ")  " +
-                                "Impact=" + hasImpact +
-                                " RMS=" + String.format("%.2f", rmsPeak) +
-                                " LF%=" + String.format("%.2f", lfRatio) +
-                                " HF%=" + String.format("%.2f", hfRatio) +
-                                " Ctr=" + String.format("%.0f", centroid) +
-                                " W=" + String.format("%.0fms", widthMs) +
-                                " Post=" + calmAfter +
-                                " path=" + path +
-                                " → FALL=" + isFall
-                );
+//                Log.d(TAG,
+//                        "Top=" + topLabel + " (" + String.format("%.2f", topScore) + ")  " +
+//                                "Impact=" + hasImpact +
+//                                " RMS=" + String.format("%.2f", rmsPeak) +
+//                                " LF%=" + String.format("%.2f", lfRatio) +
+//                                " HF%=" + String.format("%.2f", hfRatio) +
+//                                " Ctr=" + String.format("%.0f", centroid) +
+//                                " W=" + String.format("%.0fms", widthMs) +
+//                                " Post=" + calmAfter +
+//                                " path=" + path +
+//                                " → FALL=" + isFall
+//                );
 
                 if (isFall) {
                     if (!com.example.toto_app.falls.FallSignals.tryActivate()) {
@@ -302,11 +303,12 @@ public class FallDetectionService extends Service {
                                 .setAction(com.example.toto_app.services.WakeWordService.ACTION_PAUSE_LISTEN);
                         androidx.core.content.ContextCompat.startForegroundService(ctx, pause);
 
+                        UserDataManager userDataManager = new UserDataManager(ctx);
                         android.content.Intent say = new android.content.Intent(ctx, com.example.toto_app.services.WakeWordService.class)
                                 .setAction(com.example.toto_app.services.WakeWordService.ACTION_SAY)
                                 .putExtra("text", "Escuché un golpe. ¿Estás bien?")
                                 .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true)
-                                .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_AFTER_SAY_USER_NAME, "Juan")
+                                .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_AFTER_SAY_USER_NAME, userDataManager.getUserName())
                                 .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_AFTER_SAY_FALL_MODE, "AWAIT:0");
                         androidx.core.content.ContextCompat.startForegroundService(ctx, say);
                     }

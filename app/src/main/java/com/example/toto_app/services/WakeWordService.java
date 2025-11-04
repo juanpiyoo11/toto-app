@@ -41,6 +41,7 @@ import java.util.regex.Pattern;
 
 import com.example.toto_app.falls.FallSignals;
 import com.example.toto_app.util.TtsSanitizer;
+import com.example.toto_app.util.UserDataManager;
 
 public class WakeWordService extends Service implements RecognitionListener {
 
@@ -60,12 +61,17 @@ public class WakeWordService extends Service implements RecognitionListener {
     public static final String EXTRA_AFTER_SAY_USER_NAME = "after_say_user_name";
     public static final String EXTRA_AFTER_SAY_FALL_MODE = "after_say_fall_mode";
     public static final String EXTRA_AFTER_SAY_CONFIRM_WHATSAPP = "after_say_confirm_whatsapp";
+    public static final String EXTRA_AFTER_SAY_CONFIRM_REMINDER = "after_say_confirm_reminder";
+    public static final String EXTRA_REMINDER_ID = "reminder_id";
+    public static final String ACTION_REMINDER_HANDLED = "com.example.toto_app.ACTION_REMINDER_HANDLED";
 
     public static final String EXTRA_REASON = "reason";
     public static final String REASON_FALL_CLEAR = "FALL_CLEAR";
 
     // Pending WhatsApp confirmation prompt handling
     private volatile boolean pendingWhatsAppConfirm = false;
+    // Pending Reminder confirmation prompt handling (for medications)
+    private volatile boolean pendingReminderConfirm = false;
     @Nullable
     private volatile String pendingWhatsAppText = null;
     // NEW: when a WhatsApp confirm prompt is deferred, preserve the after-say chain here
@@ -86,7 +92,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     private String lastDetectionText = "";
     private volatile boolean triggered = false;
 
-    private String userName = "Juan";
+    private UserDataManager userDataManager;
 
     private Model model;
     private SpeechService speechService;
@@ -189,7 +195,7 @@ public class WakeWordService extends Service implements RecognitionListener {
             Intent pause = new Intent(WakeWordService.this, WakeWordService.class).setAction(ACTION_PAUSE_LISTEN);
             androidx.core.content.ContextCompat.startForegroundService(WakeWordService.this, pause);
 
-            String who = (un == null || un.trim().isEmpty()) ? userName : un.trim();
+            String who = (un == null || un.trim().isEmpty()) ? userDataManager.getUserName() : un.trim();
             Intent say = new Intent(WakeWordService.this, WakeWordService.class)
                     .setAction(ACTION_SAY)
                     .putExtra("text", "Escuché un golpe. ¿Estás bien?")
@@ -203,6 +209,9 @@ public class WakeWordService extends Service implements RecognitionListener {
     @Override
     public void onCreate() {
         super.onCreate();
+        
+        // Initialize UserDataManager
+        userDataManager = new UserDataManager(getApplicationContext());
 
         IntentFilter filter = new IntentFilter(ACTION_CMD_FINISHED);
         // Usar ContextCompat.registerReceiver para manejar flags en todas las APIs
@@ -408,7 +417,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     private void startInstructionService() {
         stopListening();
         Intent i = new Intent(this, InstructionService.class);
-        i.putExtra("user_name", userName);
+        i.putExtra("user_name", userDataManager.getUserName());
         startService(i); // Servicio normal, NO FGS
     }
 
@@ -500,13 +509,6 @@ public class WakeWordService extends Service implements RecognitionListener {
                 maybeSpeakPendingWhatsApp();
                 rearmWake();
                 return START_STICKY;
-            }
-
-            if (intent.hasExtra("user_name")) {
-                String incoming = intent.getStringExtra("user_name");
-                if (incoming != null && !incoming.trim().isEmpty()) {
-                    userName = incoming.trim();
-                }
             }
         }
         return START_STICKY;
@@ -709,7 +711,7 @@ public class WakeWordService extends Service implements RecognitionListener {
 
         if (ttsReady && tts != null) {
             String template = ACK_TEMPLATES[rng.nextInt(ACK_TEMPLATES.length)];
-            String text = String.format(Locale.getDefault(), template, userName);
+            String text = String.format(Locale.getDefault(), template, userDataManager.getUserName());
             String s = TtsSanitizer.sanitizeForTTS(text);
 
             Bundle params = new Bundle();
