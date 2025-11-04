@@ -232,6 +232,22 @@ public class InstructionService extends android.app.Service {
                     if (res == 0) sayViaWakeService("Ya avisé a tus contactos de emergencia.", 0);
                     else if (res == 1) sayViaWakeService("No hay conexión al servidor. En cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
                     else sayViaWakeService("Tuve algunos inconvenientes para avisar a tus contactos.", 0);
+                    
+                    // Log fall event to history
+                    try {
+                        Long userId = userDataManager.getUserId();
+                        if (userId != null) {
+                            String userName = userDataManager.getUserName();
+                            String details = (userName != null && !userName.isEmpty() ? userName : "Usuario") 
+                                + " pidió ayuda o se detectó una caída. Respuesta: \"" + transcript + "\"";
+                            com.example.toto_app.network.HistoryEventDTO event = 
+                                new com.example.toto_app.network.HistoryEventDTO(userId, "FALL_DETECTED", details);
+                            RetrofitClient.api().createHistoryEvent(event).execute();
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error logging fall event to history", e);
+                    }
+                    
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -243,6 +259,22 @@ public class InstructionService extends android.app.Service {
                 }
                 case OK: {
                     sayViaWakeService("Me alegro. Si necesitás ayuda, decime.", 0);
+                    
+                    // Log fall event as resolved to history
+                    try {
+                        Long userId = userDataManager.getUserId();
+                        if (userId != null) {
+                            String userName = userDataManager.getUserName();
+                            String details = (userName != null && !userName.isEmpty() ? userName : "Usuario") 
+                                + " reportó estar bien tras detección de caída. Respuesta: \"" + transcript + "\"";
+                            com.example.toto_app.network.HistoryEventDTO event = 
+                                new com.example.toto_app.network.HistoryEventDTO(userId, "FALL_RESOLVED", details);
+                            RetrofitClient.api().createHistoryEvent(event).execute();
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error logging fall resolved event to history", e);
+                    }
+                    
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
