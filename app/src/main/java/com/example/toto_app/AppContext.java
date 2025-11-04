@@ -10,7 +10,6 @@ public class AppContext extends Application {
     @Override public void onCreate() {
         super.onCreate();
         ctx = getApplicationContext();
-        // inicializar manager de backend
         BackendHealthManager.init(ctx);
     }
     public static Context get() { return ctx; }

@@ -19,7 +19,6 @@ public final class SttClient {
 
     public static String transcribe(File wav) {
         String transcript = "";
-        // 1) Chequeo rápido si backend parece UP
         boolean up = true;
         try {
             try { up = com.example.toto_app.services.BackendHealthManager.get().isBackendUp(); }
@@ -48,7 +47,6 @@ public final class SttClient {
             }
         }
 
-        // 2) Fallback a VOSK local si el modelo está disponible
         try {
             org.vosk.Model model = com.example.toto_app.services.WakeWordServiceModelHolder.getModel();
             if (model != null) {
@@ -56,7 +54,7 @@ public final class SttClient {
                 java.io.FileInputStream fis = null;
                 try {
                     fis = new java.io.FileInputStream(wav);
-                    long skip = fis.skip(44); // skip WAV header
+                    long skip = fis.skip(44);
                     int avail = (int) Math.max(0, wav.length() - 44);
                     byte[] raw = new byte[avail];
                     int offset = 0; int read;

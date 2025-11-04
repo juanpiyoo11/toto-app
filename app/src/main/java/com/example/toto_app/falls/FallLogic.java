@@ -45,7 +45,6 @@ public final class FallLogic {
     }
 
     public static boolean mentionsFall(String norm) {
-        // expanded forms: handle variations like "cae", "cayo", "resbalé" and also fuzzy matches
         if (norm.contains(" me cai ") || norm.contains(" me ca\u00ed ")
                 || norm.contains(" me caigo ") || norm.contains(" me estoy cayendo ")
                 || norm.contains(" caida ") || norm.contains(" ca\u00edda ")
@@ -53,11 +52,9 @@ public final class FallLogic {
                 || norm.contains(" me pegue ") || norm.contains(" me pegu\u00e9 ")
                 || norm.contains(" me desmaye ") || norm.contains(" me desmay\u00e9 ")) return true;
 
-        // verbs and stems
         if (norm.contains(" cae ") || norm.contains(" cayo ") || norm.contains(" caigo ")) return true;
         if (norm.contains(" resbale ") || norm.contains(" resbal\u00e9 ") || norm.contains(" resbal\u00f3 ") || norm.contains(" resbalo ")) return true;
 
-        // fuzzy token-level check for common misspellings near "cai"/"cae"
         String s = norm.trim();
         String[] toks = s.split("\\s+");
         for (String t : toks) {
@@ -73,7 +70,6 @@ public final class FallLogic {
         return d <= maxDist;
     }
 
-    // simple Levenshtein
     private static int levenshtein(String a, String b) {
         int[] costs = new int[b.length() + 1];
         for (int j = 0; j < costs.length; j++) costs[j] = j;
@@ -135,7 +131,6 @@ public final class FallLogic {
         return FallReply.UNKNOWN;
     }
 
-    // ===== Emergencia (idéntico comportamiento) =====
     public static String buildEmergencyText(String userName) {
         String u = (userName == null || userName.isBlank()) ? "la persona" : userName;
         return "⚠️ Alerta: " + u + " puede haberse caído o pidió ayuda. "
@@ -156,7 +151,6 @@ public final class FallLogic {
                     || (wbody.id != null && !wbody.id.trim().isEmpty()));
         } catch (Exception ex) {
             Log.e("FallLogic", "Error enviando WhatsApp a emergencia", ex);
-            // Si falló, encolar para reintentar cuando el backend vuelva
             try {
                 PendingEmergencyStore.get().add(numberE164, userName);
             } catch (Exception e2) { Log.e("FallLogic", "No se pudo encolar emergencia", e2); }
@@ -165,9 +159,6 @@ public final class FallLogic {
         }
     }
 
-    /**
-     * Result codes: 0=sent, 1=queued (backend down/network error), 2=failed (other error like 409)
-     */
     public static int sendEmergencyMessageToResult(String numberE164, String userName) {
         try {
             String to = numberE164.replaceAll("[^0-9+]", "");
@@ -181,16 +172,13 @@ public final class FallLogic {
                     || "ok_template".equalsIgnoreCase(wbody.status)
                     || (wbody.id != null && !wbody.id.trim().isEmpty()));
             if (ok) return 0;
-            
-            // Check if it's a server error, 404 (server down), 5xx, or network issue vs client error (like 409)
+
             int code = wresp.code();
             if (code >= 500 || code == 0 || code == 404) {
-                // Server error, 404 (backend down), or network error -> queue for retry
                 PendingEmergencyStore.get().add(numberE164, userName);
                 try { com.example.toto_app.services.BackendHealthManager.get().markFailure(); } catch (Exception ignore) {}
                 return 1;
             } else {
-                // Client error (4xx like 409 recipient not allowed) -> don't queue, it won't work on retry
                 Log.w("FallLogic", "Client error " + code + " sending to " + to + " - not queuing");
                 return 2;
             }
@@ -204,10 +192,6 @@ public final class FallLogic {
         }
     }
 
-    /**
-     * Send emergency message to multiple contacts.
-     * Returns: 0=all sent, 1=some queued (network/server error), 2=some failed (client errors)
-     */
     public static int sendEmergencyMessageToMultiple(java.util.List<String> phoneNumbers, String userName) {
         if (phoneNumbers == null || phoneNumbers.isEmpty()) return 2;
         

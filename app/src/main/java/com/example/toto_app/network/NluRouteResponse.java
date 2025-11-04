@@ -16,11 +16,10 @@ public class NluRouteResponse {
         public String datetime_iso;
         public String message_text;
         public String app_name;
-        
-        // Reminder-specific fields
-        public String reminder_title;     // Núcleo del recordatorio sin palabras temporales
-        public String reminder_type;      // medication, appointment, event
-        public String repeat_pattern;     // once, daily, weekly, monthly
-        public String query_reminder_type; // medication, appointment, event (para QUERY_REMINDERS)
+
+        public String reminder_title;
+        public String reminder_type;
+        public String repeat_pattern;
+        public String query_reminder_type;
     }
 }

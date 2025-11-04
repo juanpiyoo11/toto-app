@@ -13,25 +13,21 @@ android {
         versionCode 1
         versionName "1.0"
 
-        // placeholder por si lo querés usar en notificaciones/títulos
         manifestPlaceholders = [appName: "Toto"]
     }
 
-    // Asegura que BuildConfig se genere (a veces el IDE lo “pierde”)
     buildFeatures {
         buildConfig true
     }
 
     buildTypes {
         debug {
-            // ¡Debe terminar en "/"!
 //            buildConfigField "String", "BACKEND_BASE_URL", "\"http://192.168.1.9:8080/\""
             buildConfigField "String", "BACKEND_BASE_URL", "\"https://toto-backend-production.up.railway.app/\""
         }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // Cambiá por tu URL real de prod. ¡Debe terminar en "/"!
             buildConfigField "String", "BACKEND_BASE_URL", "\"https://toto-backend-production.up.railway.app/\""
 //            buildConfigField "String", "BACKEND_BASE_URL", "\"http://192.168.1.9:8080/\""
         }
@@ -60,13 +56,10 @@ dependencies {
     implementation "com.squareup.okhttp3:logging-interceptor:4.12.0"
     implementation "com.google.code.gson:gson:2.11.0"
 
-    // Vosk Android (ASR offline)
     implementation "com.alphacephei:vosk-android:0.3.47"
 
-    // yamnet
     implementation "org.tensorflow:tensorflow-lite-task-audio:0.4.4"
     implementation "org.tensorflow:tensorflow-lite-support:0.4.4"
 
-    // WorkManager para reintentos de health check
     implementation "androidx.work:work-runtime:2.8.1"
 }

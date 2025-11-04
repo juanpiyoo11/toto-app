@@ -33,7 +33,6 @@ public class HealthCheckWorker extends Worker {
         } catch (Throwable t) {
             Log.w(TAG, "health check worker exception", t);
         }
-        // reintentar con backoff
         return Result.retry();
     }
 

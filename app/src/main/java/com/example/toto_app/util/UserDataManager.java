@@ -19,10 +19,6 @@ import retrofit2.Call;
 import retrofit2.Callback;
 import retrofit2.Response;
 
-/**
- * Manages user data loaded from backend.
- * Provides access to user profile and emergency contacts throughout the app.
- */
 public class UserDataManager {
     private static final String TAG = "UserDataManager";
     private static final String PREFS_NAME = "UserDataPrefs";
@@ -51,12 +47,8 @@ public class UserDataManager {
         loadFromPreferences();
     }
     
-    /**
-     * Load user data from backend and cache it locally.
-     * Should be called after login.
-     */
+
     public void loadUserData(final UserDataCallback callback) {
-        // Load user profile
         api.getUserProfile().enqueue(new Callback<UserProfileDTO>() {
             @Override
             public void onResponse(Call<UserProfileDTO> call, Response<UserProfileDTO> response) {
@@ -65,8 +57,7 @@ public class UserDataManager {
                     userId = profile.getId();
                     userName = profile.getName();
                     userPhone = profile.getPhone();
-                    
-                    // Save to preferences
+
                     prefs.edit()
                             .putLong(KEY_USER_ID, userId != null ? userId : 0L)
                             .putString(KEY_USER_NAME, userName)
@@ -74,8 +65,7 @@ public class UserDataManager {
                             .apply();
                     
                     Log.d(TAG, "User profile loaded: " + userName);
-                    
-                    // Now load emergency contacts
+
                     loadEmergencyContacts(callback);
                 } else {
                     Log.e(TAG, "Failed to load user profile: " + response.code());
@@ -97,18 +87,15 @@ public class UserDataManager {
             public void onResponse(Call<List<EmergencyContactDTO>> call, Response<List<EmergencyContactDTO>> response) {
                 if (response.isSuccessful() && response.body() != null) {
                     List<EmergencyContactDTO> contacts = response.body();
-                    
-                    // Save ALL contacts
+
                     allEmergencyContacts = contacts;
                     String contactsJson = gson.toJson(contacts);
                     
                     if (!contacts.isEmpty()) {
-                        // Keep first contact for backwards compatibility
                         EmergencyContactDTO primary = contacts.get(0);
                         emergencyContactName = primary.getName();
                         emergencyContactPhone = primary.getPhone();
-                        
-                        // Save to preferences
+
                         prefs.edit()
                                 .putString(KEY_EMERGENCY_NAME, emergencyContactName)
                                 .putString(KEY_EMERGENCY_PHONE, emergencyContactPhone)
@@ -142,8 +129,7 @@ public class UserDataManager {
         userPhone = prefs.getString(KEY_USER_PHONE, null);
         emergencyContactName = prefs.getString(KEY_EMERGENCY_NAME, null);
         emergencyContactPhone = prefs.getString(KEY_EMERGENCY_PHONE, null);
-        
-        // Load all emergency contacts from JSON
+
         String contactsJson = prefs.getString(KEY_ALL_EMERGENCY_CONTACTS, null);
         if (contactsJson != null) {
             Type listType = new TypeToken<ArrayList<EmergencyContactDTO>>(){}.getType();
@@ -159,7 +145,6 @@ public class UserDataManager {
     }
     
     public String getUserName() {
-        // Always read fresh from preferences to get latest value
         String name = prefs.getString(KEY_USER_NAME, "Usuario");
         return name != null ? name : "Usuario";
     }
@@ -180,12 +165,8 @@ public class UserDataManager {
         return emergencyContactName != null && emergencyContactPhone != null;
     }
     
-    /**
-     * Get all emergency contacts (caregivers + trusted contacts).
-     * @return List of all emergency contacts
-     */
+
     public List<EmergencyContactDTO> getAllEmergencyContacts() {
-        // Always reload from preferences to get latest
         String contactsJson = prefs.getString(KEY_ALL_EMERGENCY_CONTACTS, null);
         if (contactsJson != null) {
             Type listType = new TypeToken<ArrayList<EmergencyContactDTO>>(){}.getType();

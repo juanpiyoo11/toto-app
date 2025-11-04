@@ -16,7 +16,7 @@ import androidx.core.content.ContextCompat;
 public class CallLauncherActivity extends AppCompatActivity {
 
     private String number = "";
-    private boolean callStarted = false; // evita doble disparo por callbacks/resumes
+    private boolean callStarted = false;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -25,7 +25,6 @@ public class CallLauncherActivity extends AppCompatActivity {
         number = getIntent() != null ? getIntent().getStringExtra("number") : "";
         if (number == null) number = "";
 
-        // Por compatibilidad: asegurar que se muestre arriba del lockscreen en más APIs
         if (Build.VERSION.SDK_INT >= 27) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
@@ -42,7 +41,6 @@ public class CallLauncherActivity extends AppCompatActivity {
         }
 
         if (isLocked()) {
-            // Pedimos desbloquear y recién ahí llamamos
             KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
             if (km != null && Build.VERSION.SDK_INT >= 26) {
                 km.requestDismissKeyguard(this, new KeyguardManager.KeyguardDismissCallback() {
@@ -51,11 +49,9 @@ public class CallLauncherActivity extends AppCompatActivity {
                     @Override public void onDismissCancelled() { finishNoAnim(); }
                 });
             } else {
-                // APIs viejas / sin km → mejor no arriesgar: abrimos dialer
                 startDialerAndFinishOnce();
             }
         } else {
-            // Desbloqueado
             startCallAndFinishOnce();
         }
     }
@@ -81,7 +77,6 @@ public class CallLauncherActivity extends AppCompatActivity {
                 ? new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)))
                 : new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number)));
 
-        // somos Activity en foreground → no hace falta NEW_TASK; CLEAR_TOP evita stacks raros
         i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
         try { startActivity(i); } catch (Exception ignored) { }

@@ -41,19 +41,16 @@ public class FallDetectionService extends Service {
     private static final String CH_ID = "toto_yamnet";
     private static final int NOTIF_ID = 774200;
 
-    // Acciones para pausar/reanudar
     public static final String ACTION_PAUSE_FALL  = "com.example.toto_app.action.PAUSE_FALL";
     public static final String ACTION_RESUME_FALL = "com.example.toto_app.action.RESUME_FALL";
 
-    // Audio
     private static final int SR   = 16000;
     private static final int CH   = AudioFormat.CHANNEL_IN_MONO;
     private static final int FMT  = AudioFormat.ENCODING_PCM_16BIT;
-    private static final int SEC  = 3;           // impacto + post-silencio
-    private static final int HOP  = 160;         // 10 ms
+    private static final int SEC  = 3;
+    private static final int HOP  = 160;
     private static final int FFTN = 512;
 
-    // YAMNet (labels de “impacto”)
     private static final Set<String> IMPACT_LABELS = new HashSet<>();
     static {
         String[] labs = new String[]{
@@ -65,28 +62,23 @@ public class FallDetectionService extends Service {
         for (String s : labs) IMPACT_LABELS.add(s.toLowerCase());
     }
 
-    // Umbrales base (nos quedamos con el perfil actual)
     private static final float YAMNET_IMPACT_THRESHOLD = 0.20f;
     private static final int   IMPACT_TOP_K            = 3;
     private static final float RMS_PEAK_THRESHOLD      = 0.15f;
-    private static final float LOWFREQ_RATIO_THRESHOLD = 0.35f; // filtro de graves base
+    private static final float LOWFREQ_RATIO_THRESHOLD = 0.35f;
     private static final float POST_SILENCE_RMS        = 0.04f;
     private static final float POST_SILENCE_SECONDS    = 0.40f;
 
-    // Anti-agudos (aplausos/knocks cercanos)
     private static final float HF1_MIN_HZ              = 2000f;
     private static final float HF1_MAX_HZ              = 6000f;
     private static final float HF1_RATIO_MAX           = 0.65f;
     private static final float CENTROID_MAX_HZ         = 4200f;
     private static final float MIN_WIDTH_MS            = 30f;
 
-    // -------- Camino alternativo FAR-FIELD (selectivo) --------
-    // Permite LF bajo si el evento es lo bastante fuerte y no es “muy agudo”.
-    private static final float FF_RMS_MIN              = 0.27f;  // exige golpe fuerte
-    private static final float FF_HF_RATIO_MAX         = 0.46f;  // agudos contenidos
-    private static final float FF_CENTROID_MAX_HZ      = 4050f;  // espectro no tan agudo
-    private static final float FF_WIDTH_MS_MIN         = 28f;    // transiente no “pinch”
-    // ----------------------------------------------------------
+    private static final float FF_RMS_MIN              = 0.27f;
+    private static final float FF_HF_RATIO_MAX         = 0.46f;
+    private static final float FF_CENTROID_MAX_HZ      = 4050f;
+    private static final float FF_WIDTH_MS_MIN         = 28f;
 
     private Thread worker;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -221,9 +213,8 @@ public class FallDetectionService extends Service {
                 for (int i = 0; i < off; i++) audio[i] = cap[i] / 32768f;
 
                 float[][] mag  = STFT.computeMagnitudeSpectrogram(audio, SR, frame, hop, STFT.WindowType.HANN);
-                float[][] db01 = STFT.toDecibel(mag, -80f); // solo para logs
+                float[][] db01 = STFT.toDecibel(mag, -80f);
 
-                // YAMNet
                 List<Classifications> results = null;
                 String topLabel = null; float topScore = -1f;
                 try {
@@ -247,7 +238,6 @@ public class FallDetectionService extends Service {
                 int   peakF     = peak.peakFrame;
                 float widthMs   = peak.widthMs50;
 
-                // Rasgos espectrales (en magnitud)
                 float lfRatio   = lowFreqRatioMAG(mag,   peakF, SR, frame, 500f);
                 float hfRatio   = bandRatioMAG  (mag,    peakF, SR, frame, HF1_MIN_HZ, HF1_MAX_HZ);
                 float centroid  = spectralCentroidMAG(mag, peakF, SR, frame);
@@ -259,12 +249,10 @@ public class FallDetectionService extends Service {
                 boolean calmAfter  = postSilent;
                 boolean widthOk    = widthMs  >= MIN_WIDTH_MS;
 
-                // Camino "bassy" (clásico)
                 boolean bassy      = lfRatio  >= LOWFREQ_RATIO_THRESHOLD;
                 boolean vetoAgudo  = (hfRatio >= HF1_RATIO_MAX) || (centroid >= CENTROID_MAX_HZ);
                 boolean passBassy  = strongPeak && widthOk && calmAfter && bassy && !vetoAgudo;
 
-                // Camino FAR-FIELD (selectivo): fuerte + no tan agudo
                 boolean passFarField =
                         strongPeak &&
                                 calmAfter &&
@@ -277,22 +265,9 @@ public class FallDetectionService extends Service {
 
                 String path = passBassy ? "LF" : (passFarField ? "FF" : "--");
 
-//                Log.d(TAG,
-//                        "Top=" + topLabel + " (" + String.format("%.2f", topScore) + ")  " +
-//                                "Impact=" + hasImpact +
-//                                " RMS=" + String.format("%.2f", rmsPeak) +
-//                                " LF%=" + String.format("%.2f", lfRatio) +
-//                                " HF%=" + String.format("%.2f", hfRatio) +
-//                                " Ctr=" + String.format("%.0f", centroid) +
-//                                " W=" + String.format("%.0fms", widthMs) +
-//                                " Post=" + calmAfter +
-//                                " path=" + path +
-//                                " → FALL=" + isFall
-//                );
-
                 if (isFall) {
                     if (!com.example.toto_app.falls.FallSignals.tryActivate()) {
-                        // ignorado, ya hay una caída en curso o cooldown
+                        
                     } else {
                         android.content.Context ctx = this;
                         android.content.Intent stopTts = new android.content.Intent(ctx, com.example.toto_app.services.WakeWordService.class)
@@ -313,10 +288,9 @@ public class FallDetectionService extends Service {
                         androidx.core.content.ContextCompat.startForegroundService(ctx, say);
                     }
 
-                    SystemClock.sleep(1200); // cooldown local corto sólo para logs/flujo
+                    SystemClock.sleep(1200);
                 }
 
-                // deslizamiento 50%
                 int keep = cap.length / 2;
                 System.arraycopy(cap, keep, cap, 0, cap.length - keep);
                 off = cap.length - keep;
@@ -330,8 +304,6 @@ public class FallDetectionService extends Service {
             }
         } catch (Exception ignore) {}
     }
-
-    // ===== Helpers =====
 
     private static boolean hasImpactLabelTopK(List<Classifications> results, float minScore, int topK) {
         if (results == null) return false;
@@ -391,7 +363,6 @@ public class FallDetectionService extends Service {
         return n > 0 ? (float)Math.sqrt(acc / n) : 0f;
     }
 
-    // ===== Band features sobre MAGNITUD =====
 
     private static float lowFreqRatioMAG(float[][] mag, int frameIdx, int sampleRate, int frameSize, float cutoffHz) {
         if (mag == null || mag.length == 0) return 0f;

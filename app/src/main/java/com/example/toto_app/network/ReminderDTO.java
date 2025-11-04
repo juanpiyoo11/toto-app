@@ -3,19 +3,16 @@ package com.example.toto_app.network;
 public class ReminderDTO {
     private Long id;
     private Long elderlyId;
-    private String reminderType; // MEDICATION, APPOINTMENT, EVENT
+    private String reminderType;
     private String title;
     private String description;
-    private String reminderTime; // ISO 8601 format
-    private String repeatPattern; // DAILY, WEEKLY, MONTHLY, NONE
-    
-    // Medication-specific
+    private String reminderTime;
+    private String repeatPattern;
+
     private String dosage;
-    
-    // Appointment-specific
+
     private String doctor;
-    
-    // Appointment and Event specific
+
     private String location;
     private Integer leadTimeMinutes;
     

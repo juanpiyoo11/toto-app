@@ -91,7 +91,6 @@ public final class VadUtils {
         }
     }
 
-    // ====== WAV low-level ======
     private static class WavInfo {
         int sampleRate;
         int channels;

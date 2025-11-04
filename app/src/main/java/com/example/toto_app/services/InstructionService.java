@@ -47,17 +47,15 @@ public class InstructionService extends android.app.Service {
 
     private static final String TAG = "InstructionService";
 
-    // Bandera global simple para saber si hay conversación activa (grabación/STT/NLU en curso)
     private static volatile boolean sConversationActive = false;
     public static boolean isConversationActive() { return sConversationActive; }
 
-    // Pending reminder context: when a reminder needs clarification (e.g., missing hour)
     private static volatile String sPendingReminderMessage = null;
     private static volatile String sPendingReminderTitle = null;
     private static volatile String sPendingReminderType = null;
     private static volatile String sPendingReminderPattern = null;
     private static volatile long sPendingReminderTimestamp = 0;
-    private static final long PENDING_REMINDER_TIMEOUT_MS = 120_000; // 2 minutes
+    private static final long PENDING_REMINDER_TIMEOUT_MS = 120_000;
 
     private UserDataManager userDataManager;
 
@@ -75,7 +73,6 @@ public class InstructionService extends android.app.Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // marca conversación activa mientras este servicio esté vivo
         sConversationActive = true;
 
         if (intent != null) {
@@ -95,14 +92,12 @@ public class InstructionService extends android.app.Service {
             }
         }
 
-        // If this is a WhatsApp confirm flow, we don't activate fall signals; otherwise keep existing behavior
         if (fallMode != null && !confirmWhatsApp) {
             if (!FallSignals.isActive()) {
                 FallSignals.tryActivate();
             }
             fallOwner = true;
         } else if (fallMode != null && confirmWhatsApp) {
-            // confirm flow: don't touch FallSignals, but mark owner=false
             fallOwner = false;
         } else {
             if (FallSignals.isActive() && !confirmWhatsApp) {
@@ -161,6 +156,21 @@ public class InstructionService extends android.app.Service {
                     if (res == 0) sayViaWakeService("No te escuché. Ya avisé a tus contactos de emergencia.", 0);
                     else if (res == 1) sayViaWakeService("No hay conexión al servidor. En cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
                     else sayViaWakeService("No te escuché. Tuve algunos inconvenientes para avisar a tus contactos.", 0);
+                    
+                    try {
+                        Long userId = userDataManager.getUserId();
+                        if (userId != null) {
+                            String userName = userDataManager.getUserName();
+                            String details = (userName != null && !userName.isEmpty() ? userName : "Usuario") 
+                                + " no respondió tras detección de caída. Se enviaron alertas automáticamente";
+                            com.example.toto_app.network.HistoryEventDTO event = 
+                                new com.example.toto_app.network.HistoryEventDTO(userId, "FALL_DETECTED", details);
+                            RetrofitClient.api().createHistoryEvent(event).execute();
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error logging fall event to history", e);
+                    }
+                    
                     if (fallOwner) {
                         FallSignals.clear();
                         Intent resume = new Intent(this, WakeWordService.class)
@@ -173,7 +183,6 @@ public class InstructionService extends android.app.Service {
                 stopSelf();
                 return;
             } else {
-                // If this was a WhatsApp confirm flow, treat lack of voice as negative/absence
                 if (confirmWhatsApp) {
                     IncomingMessageStore.get().clear();
                     try {
@@ -233,7 +242,6 @@ public class InstructionService extends android.app.Service {
                     else if (res == 1) sayViaWakeService("No hay conexión al servidor. En cuanto vuelva la conexión enviaré el mensaje de emergencia.", 0);
                     else sayViaWakeService("Tuve algunos inconvenientes para avisar a tus contactos.", 0);
                     
-                    // Log fall event to history
                     try {
                         Long userId = userDataManager.getUserId();
                         if (userId != null) {
@@ -260,7 +268,6 @@ public class InstructionService extends android.app.Service {
                 case OK: {
                     sayViaWakeService("Me alegro. Si necesitás ayuda, decime.", 0);
                     
-                    // Log fall event as resolved to history
                     try {
                         Long userId = userDataManager.getUserId();
                         if (userId != null) {
@@ -293,7 +300,6 @@ public class InstructionService extends android.app.Service {
         }
 
         if (transcript.isEmpty()) {
-            // For WhatsApp confirm flows, treat empty transcript as absence -> clear and re-arm
             if (confirmWhatsApp) {
                 IncomingMessageStore.get().clear();
                 try {
@@ -314,7 +320,6 @@ public class InstructionService extends android.app.Service {
         }
 
         String normAll = FallLogic.normEs(transcript);
-        // Ya no checkeamos caídas aquí - lo haremos solo si el backend falla
 
         try {
             String norm = java.text.Normalizer.normalize(transcript, java.text.Normalizer.Form.NFD)
@@ -341,17 +346,14 @@ public class InstructionService extends android.app.Service {
                 IncomingMessageStore.Msg m = IncomingMessageStore.get().peek();
                 if (m != null) {
                     String who = (m.from == null ? "alguien" : m.from);
-                    // Por defecto, límite de cuántos leer ahora. Elegimos 5 para no ser engorroso.
                     final int READ_LIMIT = 5;
                     String tts;
                     List<String> toMark = null;
 
                     if (m.parts != null && !m.parts.isEmpty()) {
-                        // filtrar los que aún no se leyeron y tomar los últimos hasta READ_LIMIT
                         List<String> freshParts = IncomingMessageStore.get().filterNewParts(who, m.parts, READ_LIMIT);
                         if (!freshParts.isEmpty()) {
                             toMark = new ArrayList<>(freshParts);
-                            // Construir TTS: "Nombre dice: msg1. msg2. msg3"
                             StringBuilder sb = new StringBuilder();
                             sb.append(who).append(" dice: ");
                             for (int i = 0; i < freshParts.size(); i++) {
@@ -360,22 +362,17 @@ public class InstructionService extends android.app.Service {
                             }
                             tts = sb.toString();
                         } else {
-                            // No hay partes nuevas -> caer a body completo (compat) una vez
                             tts = who + " dice: " + (m.body == null ? "…" : m.body);
                         }
                     } else {
-                        // Sin partes, usar cuerpo plano
                         tts = who + " dice: " + (m.body == null ? "…" : m.body);
                     }
 
-                    // Consumimos el store (para cerrar flujo de confirmación) antes de hablar
                     IncomingMessageStore.get().consume();
-                    // Marcar como leídas las partes efectivamente leídas
                     if (toMark != null && !toMark.isEmpty()) {
                         IncomingMessageStore.get().markSpoken(who, toMark);
                     }
 
-                    // Notify WakeWordService that WhatsApp confirm has been handled (clear pending flag)
                     try {
                         Intent handled = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_WHATSAPP_HANDLED);
                         androidx.core.content.ContextCompat.startForegroundService(this, handled);
@@ -383,7 +380,6 @@ public class InstructionService extends android.app.Service {
 
                     sayViaWakeService(tts, 0);
 
-                    // After reading, re-arm wake listening
                     try {
                         Intent resume = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_RESUME_LISTEN);
                         androidx.core.content.ContextCompat.startForegroundService(this, resume);
@@ -394,17 +390,13 @@ public class InstructionService extends android.app.Service {
                 }
             }
 
-            // If this is a WhatsApp confirm flow and we reached here without reading,
-            // treat it as a 'no' / absence of response: clear the pending incoming and notify service
             if (confirmWhatsApp && IncomingMessageStore.get().isAwaitingConfirm() && !saysAffirm && !saysRead) {
-                // clear stored incoming (do not read)
                 IncomingMessageStore.get().clear();
                 try {
                     Intent handled = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_WHATSAPP_HANDLED);
                     androidx.core.content.ContextCompat.startForegroundService(this, handled);
                 } catch (Exception ignored) {}
 
-                // re-arm wake listening so Toto continues normal operation
                 try {
                     Intent resume = new Intent(this, WakeWordService.class).setAction(WakeWordService.ACTION_RESUME_LISTEN);
                     androidx.core.content.ContextCompat.startForegroundService(this, resume);
@@ -415,7 +407,6 @@ public class InstructionService extends android.app.Service {
             }
         } catch (Throwable ignored) {}
 
-        // Build context from pending reminder if exists and not expired
         java.util.Map<String, Object> context = null;
         if (sPendingReminderMessage != null 
                 && (System.currentTimeMillis() - sPendingReminderTimestamp) < PENDING_REMINDER_TIMEOUT_MS) {
@@ -427,7 +418,6 @@ public class InstructionService extends android.app.Service {
             context.put("awaiting_clarification", "hour_for_reminder");
         }
         
-        // Check if we're awaiting medication confirmation
         PendingReminderDTO awaitingReminder = PendingReminderStore.get().getLastAnnounced();
         if (awaitingReminder != null && PendingReminderStore.get().isAwaitingMedicationConfirm()) {
             if (context == null) context = new java.util.HashMap<>();
@@ -482,7 +472,6 @@ public class InstructionService extends android.app.Service {
 
             if (actionable) {
                 if (!FallSignals.isActive()) {
-                    // If it's a CREATE_REMINDER waiting for hour, save pending state
                     if ("CREATE_REMINDER".equals(intentName) && nres.slots != null) {
                         sPendingReminderMessage = nres.slots.message_text;
                         sPendingReminderTitle = nres.slots.reminder_title;
@@ -492,7 +481,6 @@ public class InstructionService extends android.app.Service {
                         Log.d(TAG, "Saved pending reminder: " + sPendingReminderMessage);
                     }
                     
-                    // Say the clarifying question and then activate microphone to listen for response
                     sayThenListen(TtsSanitizer.sanitizeForTTS(nres.clarifying_question.trim()));
                 }
                 stopSelf();
@@ -540,7 +528,6 @@ public class InstructionService extends android.app.Service {
                     sayViaWakeService("¿Para qué hora querés la alarma?", 0);
                     stopSelf(); return;
                 }
-                // Si el backend está caído, no permitimos crear alarmas (según solicitud)
                 try {
                     boolean backendUp = com.example.toto_app.services.BackendHealthManager.get().isBackendUp();
                     if (!backendUp) {
@@ -548,7 +535,6 @@ public class InstructionService extends android.app.Service {
                         stopSelf(); return;
                     }
                 } catch (Throwable ignored) {
-                    // Si no podemos consultar, ser conservadores y denegar
                     sayViaWakeService("No puedo configurar la alarma ahora porque no hay conexión al servidor.", 0);
                     stopSelf(); return;
                 }
@@ -919,7 +905,6 @@ public class InstructionService extends android.app.Service {
                     stopSelf(); return;
                 }
 
-                // If we have datetime_iso, parse it
                 if ((hh == null || mm == null) && nres != null && nres.slots != null
                         && nres.slots.datetime_iso != null && !nres.slots.datetime_iso.isEmpty()) {
                     int[] hm = tryParseIsoToLocalHourMinute(nres.slots.datetime_iso);
@@ -927,7 +912,6 @@ public class InstructionService extends android.app.Service {
                 }
 
                 if (hh == null || mm == null) {
-                    // Need clarification on time
                     if (nres != null && nres.clarifying_question != null && !nres.clarifying_question.isBlank()) {
                         sayViaWakeService(TtsSanitizer.sanitizeForTTS(nres.clarifying_question), 0);
                     } else {
@@ -936,7 +920,6 @@ public class InstructionService extends android.app.Service {
                     stopSelf(); return;
                 }
 
-                // Create reminder via API
                 try {
                     Long elderlyId = userDataManager.getUserId();
                     if (elderlyId == null) {
@@ -948,20 +931,17 @@ public class InstructionService extends android.app.Service {
                     reminder.setElderlyId(elderlyId);
                     reminder.setReminderTime(formatTimeForBackend(hh, mm));
                     
-                    // Use reminder_title if available, otherwise use message_text
                     String title = (reminderTitle != null && !reminderTitle.isBlank()) ? reminderTitle : msgText;
                     reminder.setTitle(title);
                     reminder.setDescription(msgText);
                     reminder.setActive(true);
                     
-                    // Use intelligent reminder type from NLU, default to EVENT if not provided
                     if (reminderType != null && !reminderType.isBlank()) {
                         reminder.setReminderType(reminderType.toUpperCase());
                     } else {
                         reminder.setReminderType("EVENT");
                     }
                     
-                    // Use intelligent repeat pattern from NLU, default to ONCE if not provided
                     if (repeatPattern != null && !repeatPattern.isBlank()) {
                         reminder.setRepeatPattern(repeatPattern.toUpperCase());
                     } else {
@@ -972,7 +952,6 @@ public class InstructionService extends android.app.Service {
                         RetrofitClient.api().createReminder(reminder).execute();
                     
                     if (r.isSuccessful()) {
-                        // Clear pending reminder context since it was successfully created
                         sPendingReminderMessage = null;
                         sPendingReminderTitle = null;
                         sPendingReminderType = null;
@@ -1002,7 +981,6 @@ public class InstructionService extends android.app.Service {
                         stopSelf(); return;
                     }
 
-                    // Extract reminder type filter from slots
                     String queryType = null;
                     String dateFilter = null;
                     if (nres != null && nres.slots != null) {
@@ -1010,7 +988,6 @@ public class InstructionService extends android.app.Service {
                             queryType = nres.slots.query_reminder_type;
                         }
                         if (nres.slots.datetime_iso != null && !nres.slots.datetime_iso.isEmpty()) {
-                            // Extract date part only (YYYY-MM-DD)
                             dateFilter = nres.slots.datetime_iso.substring(0, Math.min(10, nres.slots.datetime_iso.length()));
                         }
                     }
@@ -1019,7 +996,6 @@ public class InstructionService extends android.app.Service {
                         RetrofitClient.api().getTodayReminders(elderlyId, queryType, dateFilter).execute();
                     
                     if (r.isSuccessful() && r.body() != null && !r.body().isEmpty()) {
-                        // Build response message based on type
                         String typeLabel = "";
                         if ("medication".equalsIgnoreCase(queryType)) {
                             typeLabel = "medicamentos";
@@ -1035,7 +1011,6 @@ public class InstructionService extends android.app.Service {
                         java.util.List<ReminderDTO> reminders = r.body();
                         for (int i = 0; i < reminders.size(); i++) {
                             ReminderDTO rem = reminders.get(i);
-                            // Use title instead of description
                             String title = rem.getTitle();
                             if (title == null || title.isEmpty()) title = "recordatorio";
                             reply.append(title);
@@ -1076,7 +1051,6 @@ public class InstructionService extends android.app.Service {
                         stopSelf(); return;
                     }
 
-                    // Extract criteria from slots
                     String title = null;
                     Integer hour = null;
                     Integer minute = null;
@@ -1124,7 +1098,6 @@ public class InstructionService extends android.app.Service {
 
             case "CONFIRM_MEDICATION": {
                 if (FallSignals.isActive()) { stopSelf(); return; }
-                // Get last announced reminder from store
                 PendingReminderDTO lastReminder = PendingReminderStore.get().getLastAnnounced();
                 
                 if (lastReminder == null || lastReminder.getId() == null) {
@@ -1181,7 +1154,6 @@ public class InstructionService extends android.app.Service {
                         .recordMedicationSkipped(lastReminder.getId(), elderlyId, body).execute();
                     
                     if (r.isSuccessful()) {
-                        // Don't clear - user might still confirm later
                         sayViaWakeService("Bueno, avisame cuando la tomes.", 0);
                     } else {
                         sayViaWakeService("Entendido.", 0);
@@ -1202,7 +1174,6 @@ public class InstructionService extends android.app.Service {
                 try { backendUp = com.example.toto_app.services.BackendHealthManager.get().isBackendUp(); } catch (Throwable ignore) { backendUp = true; }
                 
                 if (!backendUp) {
-                    // Backend caído - usar lógica local para detectar caídas
                     if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
                         sayThenListenHere("¿Estás bien?", "AWAIT:0");
                         stopSelf();
@@ -1215,7 +1186,6 @@ public class InstructionService extends android.app.Service {
                     return;
                 }
                 
-                // Backend levantado - intentar con conversación general
                 try {
                     AskRequest rq = new AskRequest();
                     rq.prompt = transcript;
@@ -1228,7 +1198,6 @@ public class InstructionService extends android.app.Service {
                 } catch (Exception ex) {
                     Log.e(TAG, "Error /api/ask", ex);
                     
-                    // Si falla el /api/ask, verificar si podría ser una caída
                     if (FallLogic.saysHelp(normAll) || FallLogic.mentionsFall(normAll)) {
                         sayThenListenHere("¿Estás bien?", "AWAIT:0");
                         stopSelf();
@@ -1255,7 +1224,6 @@ public class InstructionService extends android.app.Service {
     }
 
     private void sayThenListen(String text) {
-        // Say the text and then activate microphone for immediate listening (without requiring wake word)
         Intent say = new Intent(this, WakeWordService.class)
                 .setAction(WakeWordService.ACTION_SAY)
                 .putExtra("text", text)
@@ -1364,7 +1332,6 @@ public class InstructionService extends android.app.Service {
                 .append(", msg=").append(safe(s.message_text))
                 .append(", app=").append(safe(s.app_name));
         
-        // Add reminder-specific fields if present
         if (s.reminder_title != null || s.reminder_type != null || s.repeat_pattern != null || s.query_reminder_type != null) {
             sb.append(", rem_title=").append(safe(s.reminder_title))
               .append(", rem_type=").append(safe(s.reminder_type))
@@ -1387,7 +1354,6 @@ public class InstructionService extends android.app.Service {
     }
 
     private static String formatTimeForBackend(int hour, int minute) {
-        // Create LocalDateTime for today at the specified time
         java.util.Calendar now = java.util.Calendar.getInstance();
         java.util.Calendar reminderCal = java.util.Calendar.getInstance();
         reminderCal.set(java.util.Calendar.HOUR_OF_DAY, hour);
@@ -1395,15 +1361,13 @@ public class InstructionService extends android.app.Service {
         reminderCal.set(java.util.Calendar.SECOND, 0);
         reminderCal.set(java.util.Calendar.MILLISECOND, 0);
         
-        // If the time has already passed today, schedule for tomorrow
         if (reminderCal.before(now)) {
             reminderCal.add(java.util.Calendar.DAY_OF_MONTH, 1);
         }
         
-        // Format as ISO 8601: yyyy-MM-dd'T'HH:mm:ss
         return String.format(Locale.US, "%04d-%02d-%02dT%02d:%02d:%02d",
                 reminderCal.get(java.util.Calendar.YEAR),
-                reminderCal.get(java.util.Calendar.MONTH) + 1, // Month is 0-indexed
+                reminderCal.get(java.util.Calendar.MONTH) + 1,
                 reminderCal.get(java.util.Calendar.DAY_OF_MONTH),
                 reminderCal.get(java.util.Calendar.HOUR_OF_DAY),
                 reminderCal.get(java.util.Calendar.MINUTE),
@@ -1411,7 +1375,6 @@ public class InstructionService extends android.app.Service {
     }
 
     private static String formatTimeForSpeech(String time) {
-        // Convert "14:30:00" to "14:30" or "2:30 PM"
         if (time == null || time.isEmpty()) return "";
         String[] parts = time.split(":");
         if (parts.length >= 2) {
@@ -1427,18 +1390,15 @@ public class InstructionService extends android.app.Service {
     }
 
     private static String formatDateTimeForSpeech(String isoDateTime) {
-        // Convert "2025-11-03T14:30:00" to "el día 3 a las 14:30"
         if (isoDateTime == null || isoDateTime.isEmpty()) return "";
         
         try {
-            // Parse ISO datetime: yyyy-MM-dd'T'HH:mm:ss
             String[] parts = isoDateTime.split("T");
             if (parts.length < 2) return isoDateTime;
             
-            String datePart = parts[0]; // "2025-11-03"
-            String timePart = parts[1]; // "14:30:00"
+            String datePart = parts[0];
+            String timePart = parts[1];
             
-            // Extract date components
             String[] dateComponents = datePart.split("-");
             if (dateComponents.length < 3) return isoDateTime;
             
@@ -1446,15 +1406,13 @@ public class InstructionService extends android.app.Service {
             int month = Integer.parseInt(dateComponents[1]);
             int day = Integer.parseInt(dateComponents[2]);
             
-            // Check if it's today
             java.util.Calendar now = java.util.Calendar.getInstance();
             java.util.Calendar reminderDate = java.util.Calendar.getInstance();
-            reminderDate.set(year, month - 1, day); // month is 0-indexed in Calendar
+            reminderDate.set(year, month - 1, day);
             
             boolean isToday = now.get(java.util.Calendar.YEAR) == reminderDate.get(java.util.Calendar.YEAR) &&
                              now.get(java.util.Calendar.DAY_OF_YEAR) == reminderDate.get(java.util.Calendar.DAY_OF_YEAR);
             
-            // Format time
             String[] timeComponents = timePart.split(":");
             if (timeComponents.length < 2) return isoDateTime;
             
@@ -1462,11 +1420,9 @@ public class InstructionService extends android.app.Service {
             int minute = Integer.parseInt(timeComponents[1]);
             String timeStr = DeviceActions.hhmm(hour, minute);
             
-            // Build speech string
             if (isToday) {
                 return "a las " + timeStr;
             } else {
-                // Get day name
                 String[] dayNames = {"domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"};
                 int dayOfWeek = reminderDate.get(java.util.Calendar.DAY_OF_WEEK) - 1;
                 String dayName = dayNames[dayOfWeek];
@@ -1607,10 +1563,6 @@ public class InstructionService extends android.app.Service {
         return false;
     }
 
-    /**
-     * Send emergency message to all contacts (caregivers + trusted contacts).
-     * Returns result code: 0=sent, 1=queued, 2=failed
-     */
     private int sendEmergencyToAllContacts() {
         java.util.List<com.example.toto_app.network.EmergencyContactDTO> allContacts = 
                 userDataManager.getAllEmergencyContacts();

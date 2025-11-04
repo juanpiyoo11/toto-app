@@ -22,7 +22,6 @@ import retrofit2.http.Query;
 
 public interface APIService {
 
-    // Authentication endpoints
     @POST("api/auth/login")
     Call<LoginResponse> login(@Body LoginRequest request);
 
@@ -35,14 +34,12 @@ public interface APIService {
     @POST("api/auth/refresh")
     Call<LoginResponse> refreshToken(@Body RefreshTokenRequest request);
 
-    // User profile endpoints
     @GET("api/user/profile")
     Call<UserProfileDTO> getUserProfile();
     
     @GET("api/user/emergency-contacts")
     Call<List<EmergencyContactDTO>> getEmergencyContacts();
 
-    // Contact endpoints
     @GET("api/contacts")
     Call<List<ContactDTO>> getContacts(@Query("elderlyId") Long elderlyId);
 
@@ -58,7 +55,6 @@ public interface APIService {
     @DELETE("api/contacts/{id}")
     Call<Void> deleteContact(@Path("id") Long id);
 
-    // Reminder endpoints
     @GET("api/reminders")
     Call<List<ReminderDTO>> getReminders(
             @Query("elderlyId") Long elderlyId,
@@ -105,7 +101,6 @@ public interface APIService {
             @Query("minute") Integer minute,
             @Query("type") String type);
 
-    // History endpoints
     @GET("api/history")
     Call<List<HistoryEventDTO>> getHistory(
             @Query("userId") Long userId,
@@ -118,7 +113,6 @@ public interface APIService {
     @POST("api/history")
     Call<HistoryEventDTO> createHistoryEvent(@Body HistoryEventDTO event);
 
-    // Existing endpoints
     @Multipart
     @POST("api/stt")
     Call<TranscriptionResponse> transcribe(

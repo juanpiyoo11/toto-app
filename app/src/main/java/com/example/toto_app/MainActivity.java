@@ -3,7 +3,6 @@ package com.example.toto_app;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.app.role.RoleManager;
-import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -11,7 +10,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
-import android.service.notification.NotificationListenerService;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.Toast;
@@ -48,10 +46,8 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
-        // Check if user is logged in
         tokenManager = new TokenManager(this);
         if (tokenManager.getAccessToken() == null || tokenManager.getAccessToken().isEmpty()) {
-            // Not logged in, redirect to login
             Intent intent = new Intent(this, LoginActivity.class);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             startActivity(intent);
@@ -59,7 +55,6 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         
-        // Initialize UserDataManager and load user data from backend
         userDataManager = new UserDataManager(this);
         userDataManager.loadUserData(new UserDataManager.UserDataCallback() {
             @Override
@@ -82,7 +77,6 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Simulando caída…", Toast.LENGTH_SHORT).show();
 
             Intent i = new Intent(FallSignals.ACTION_FALL_DETECTED);
-            // Muy importante para limitarlo a tu propia app
             i.setPackage(getPackageName());
             i.putExtra(FallSignals.EXTRA_SOURCE, "ui_button");
             i.putExtra(FallSignals.EXTRA_USER_NAME, userDataManager.getUserName());
@@ -91,12 +85,10 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnPause = findViewById(R.id.btnPauseListening);
         btnPause.setOnClickListener(v -> {
-            // Pausar wake word
             Intent i1 = new Intent(this, WakeWordService.class);
             i1.setAction(WakeWordService.ACTION_PAUSE_LISTEN);
             ContextCompat.startForegroundService(this, i1);
 
-            // Pausar detección de caídas por sonido
             Intent i2 = new Intent(this, FallDetectionService.class);
             i2.setAction(FallDetectionService.ACTION_PAUSE_FALL);
             ContextCompat.startForegroundService(this, i2);
@@ -106,12 +98,10 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnResume = findViewById(R.id.btnResumeListening);
         btnResume.setOnClickListener(v -> {
-            // Reanudar wake word
             Intent i1 = new Intent(this, WakeWordService.class);
             i1.setAction(WakeWordService.ACTION_RESUME_LISTEN);
             ContextCompat.startForegroundService(this, i1);
 
-            // Reanudar detección de caídas por sonido
             Intent i2 = new Intent(this, FallDetectionService.class);
             i2.setAction(FallDetectionService.ACTION_RESUME_FALL);
             ContextCompat.startForegroundService(this, i2);
@@ -131,12 +121,10 @@ public class MainActivity extends AppCompatActivity {
                     .setTitle("Cerrar sesión")
                     .setMessage("¿Estás seguro que querés cerrar sesión?")
                     .setPositiveButton("Sí", (dialog, which) -> {
-                        // Stop services before logout
                         stopService(new Intent(this, WakeWordService.class));
                         stopService(new Intent(this, FallDetectionService.class));
                         stopService(new Intent(this, com.example.toto_app.services.ReminderPollingService.class));
                         
-                        // Clear tokens and user data
                         tokenManager.clearTokens();
                         userDataManager.clear();
                         
@@ -151,19 +139,15 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnNotif = findViewById(R.id.btnNotifAccess);
         btnNotif.setOnClickListener(v -> {
-            // Open notification listener settings
             startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
         });
 
-        // On startup, if Notification Listener not enabled, show a runtime-like popup to guide user
         if (!isNotificationListenerEnabled()) {
             showNotificationAccessPopup();
         }
 
-        // Pide permisos base y arranca Toto
         requestNeededPermissionsAndStart();
 
-        // Si nos abrió InstructionService para pedir SOLO contactos:
         if (getIntent() != null && getIntent().getBooleanExtra("request_contacts_perm", false)) {
             requestContactsIfNeeded();
         }

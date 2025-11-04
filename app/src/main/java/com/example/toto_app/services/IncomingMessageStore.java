@@ -13,14 +13,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Guarda el último WhatsApp entrante para poder leerlo cuando el usuario diga “sí / léelo”. */
 public final class IncomingMessageStore {
 
     public static final class Msg {
         public final String from;
         public final String body;
         public final long   whenElapsedMs;
-        @Nullable public final List<String> parts; // mensajes individuales ya listos para TTS
+        @Nullable public final List<String> parts;
         Msg(String from, String body, long whenElapsedMs) {
             this(from, body, whenElapsedMs, null);
         }
@@ -37,15 +36,13 @@ public final class IncomingMessageStore {
     private String body;
     private long whenMs;
     private boolean awaitingConfirm;
-    @Nullable private List<String> parts; // partes crudas para lectura
+    @Nullable private List<String> parts;
 
-    // Memoria de mensajes ya leídos por chat (clave: título del chat)
     private final Map<String, LinkedHashSet<String>> spokenByChat = new HashMap<>();
-    private static final int SPOKEN_CAP = 100; // cap por chat para evitar crecimiento
+    private static final int SPOKEN_CAP = 100;
 
     private IncomingMessageStore() {}
 
-    /** Setea/actualiza el último mensaje y marca que estamos esperando confirmación para leer. */
     public void setIncoming(String from, String body) {
         synchronized (lock) {
             this.from = (from == null || from.isEmpty()) ? "alguien" : from;
@@ -56,7 +53,6 @@ public final class IncomingMessageStore {
         }
     }
 
-    /** Variante que además guarda las partes individuales (para marcar como leídas luego). */
     public void setIncoming(String from, String body, @Nullable List<String> parts) {
         synchronized (lock) {
             this.from = (from == null || from.isEmpty()) ? "alguien" : from;
@@ -67,7 +63,6 @@ public final class IncomingMessageStore {
         }
     }
 
-    /** ¿Sigue “fresco” (reciente) y con contenido? */
     public boolean hasFresh(long maxAgeMs) {
         synchronized (lock) {
             if (body == null || body.isEmpty()) return false;
@@ -75,12 +70,10 @@ public final class IncomingMessageStore {
         }
     }
 
-    /** ¿Estamos esperando el “sí” del usuario para leer? */
     public boolean isAwaitingConfirm() {
         synchronized (lock) { return awaitingConfirm; }
     }
 
-    /** Devuelve una vista del último mensaje (sin limpiar). */
     @Nullable
     public Msg peek() {
         synchronized (lock) {
@@ -89,7 +82,6 @@ public final class IncomingMessageStore {
         }
     }
 
-    /** Consume (lee) el mensaje: desmarca confirmación y limpia. */
     @Nullable
     public Msg consume() {
         synchronized (lock) {
@@ -100,7 +92,6 @@ public final class IncomingMessageStore {
         }
     }
 
-    /** Limpia manualmente. */
     public void clear() {
         synchronized (lock) { clearLocked(); }
     }
@@ -113,9 +104,6 @@ public final class IncomingMessageStore {
         this.parts = null;
     }
 
-    // ====== Dedupe / spoken tracking ======
-
-    /** Normaliza un texto para usar como clave de dedupe. */
     private static String normKey(String s) {
         if (s == null) return "";
         String t = Normalizer.normalize(s, Normalizer.Form.NFD)
@@ -124,7 +112,6 @@ public final class IncomingMessageStore {
                 .replaceAll("[“”\"']", "")
                 .replaceAll("\\s+", " ")
                 .trim();
-        // Limita longitud para evitar claves enormes
         if (t.length() > 280) t = t.substring(0, 280);
         return t;
     }
@@ -143,23 +130,18 @@ public final class IncomingMessageStore {
         return set;
     }
 
-    /**
-     * Filtra las partes que aún no se leyeron (según memoria del chat) y devuelve hasta 'limit' más recientes.
-     * NO marca como leídas; eso se hace al confirmar lectura (markSpoken).
-     */
+
     public List<String> filterNewParts(String from, List<String> parts, int limit) {
         synchronized (lock) {
             List<String> out = new ArrayList<>();
             if (parts == null || parts.isEmpty()) return out;
             String ck = chatKey(from);
             LinkedHashSet<String> set = ensureSetLocked(ck);
-            // preservamos orden original; tomamos sólo las que no estén en "set"
             for (String p : parts) {
                 if (p == null) continue;
                 String key = normKey(p);
                 if (!set.contains(key)) out.add(p);
             }
-            // devolver últimas 'limit'
             int n = out.size();
             if (limit > 0 && n > limit) {
                 return new ArrayList<>(out.subList(n - limit, n));
@@ -168,7 +150,6 @@ public final class IncomingMessageStore {
         }
     }
 
-    /** Marca como leídas estas partes para el chat. */
     public void markSpoken(String from, @Nullable List<String> parts) {
         if (parts == null || parts.isEmpty()) return;
         synchronized (lock) {
@@ -179,7 +160,6 @@ public final class IncomingMessageStore {
                 String key = normKey(p);
                 set.add(key);
             }
-            // recortar si excede capacidad
             if (set.size() > SPOKEN_CAP) {
                 int toRemove = set.size() - SPOKEN_CAP;
                 Iterator<String> it = set.iterator();

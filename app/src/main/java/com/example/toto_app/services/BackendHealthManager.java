@@ -20,18 +20,16 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 
-/**
- * Simple manager para chequear disponibilidad del backend y notificar cuando vuelva.
- */
+
 public final class BackendHealthManager {
     private static final String TAG = "BackendHealthManager";
     private static volatile BackendHealthManager INSTANCE;
 
     private final Context ctx;
     private final OkHttpClient client;
-    private volatile boolean backendUp = true; // asumimos UP por defecto al inicio
+    private volatile boolean backendUp = true;
     private volatile long lastChecked = 0L;
-    private static final long CACHE_MS = 5000L; // cache de 5s
+    private static final long CACHE_MS = 5000L;
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
@@ -55,11 +53,7 @@ public final class BackendHealthManager {
         return INSTANCE;
     }
 
-    /**
-     * Comprueba el estado del backend usando cache de corto plazo. Esta llamada es síncrona
-     * y rápida (usa un timeout corto). Si el estado es DOWN, se arranca un watcher que
-     * pollea periódicamente hasta que el backend vuelve.
-     */
+
     public synchronized boolean isBackendUp() {
         long now = SystemClock.elapsedRealtime();
         if ((now - lastChecked) < CACHE_MS) return backendUp;
@@ -69,7 +63,6 @@ public final class BackendHealthManager {
         return up;
     }
 
-    // Hago pública una versión estática para que WorkManager pueda llamarla indirectamente
     static boolean performCheckStatic(Context ctx) {
         try {
             OkHttpClient client = new OkHttpClient.Builder()
@@ -99,31 +92,22 @@ public final class BackendHealthManager {
         this.lastChecked = SystemClock.elapsedRealtime();
         if (!prev && up) {
             Log.i(TAG, "Backend recovered -> flushing pending emergencies");
-            // enviar pendientes
             scheduler.execute(() -> {
                 try { PendingEmergencyStore.get().flushPendingNow(); } catch (Exception e) { Log.e(TAG, "flush error", e); }
             });
         } else if (prev && !up) {
             Log.w(TAG, "Backend marked DOWN -> scheduling recovery worker");
-            // schedule a WorkManager retry with exponential backoff
             try {
                 HealthCheckWorker.scheduleRetry(this.ctx, 3);
             } catch (Exception e) { Log.e(TAG, "error scheduling health worker", e); }
         }
     }
 
-    /**
-     * Called by external watchers (e.g. HealthCheckWorker) to notify the manager
-     * that the backend recovered. Will ensure instance is updated and flush pending.
-     */
+
     public synchronized void notifyRecovered() {
         setBackendUp(true);
     }
 
-    /**
-     * Marca fallo inmediato (p. ej. tras excepción en llamada). Esto actualiza el estado
-     * y arranca el watcher si aún no está en DOWN.
-     */
     public void markFailure() {
         setBackendUp(false);
     }

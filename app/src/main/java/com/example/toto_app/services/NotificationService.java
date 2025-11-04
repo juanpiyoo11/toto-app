@@ -73,7 +73,6 @@ public final class NotificationService {
         ensureActionsChannel(ctx);
 
         NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, CHANNEL_ACTIONS_ID)
-                // Usá tu ícono si tenés (R.drawable.ic_stat_toto). Este ícono existe en todos los devices:
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle(title)
                 .setContentText(text)

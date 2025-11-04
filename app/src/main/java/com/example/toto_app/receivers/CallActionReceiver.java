@@ -18,7 +18,6 @@ public class CallActionReceiver extends BroadcastReceiver {
             Toast.makeText(context, "No hay número para llamar", Toast.LENGTH_SHORT).show();
             return;
         }
-        // Dispara la llamada o abre el dialer según permisos
         DeviceActions.startCallOrDial(context, number);
     }
 }

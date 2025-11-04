@@ -39,19 +39,16 @@ public class LoginActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        
-        // Initialize TokenManager and RetrofitClient
+
         tokenManager = new TokenManager(this);
         RetrofitClient.init(this);
 
-        // Check if already logged in FIRST
         if (tokenManager.getAccessToken() != null && !tokenManager.getAccessToken().isEmpty()) {
             Log.d(TAG, "User already logged in, redirecting to MainActivity");
             navigateToMain();
             return;
         }
-        
-        // User NOT authenticated - stop services if they're running
+
         stopService(new Intent(this, WakeWordService.class));
         stopService(new Intent(this, FallDetectionService.class));
         Log.d(TAG, "Stopped all services - user not authenticated");
@@ -69,7 +66,6 @@ public class LoginActivity extends AppCompatActivity {
     private void attemptLogin() {
         String token = etToken.getText() != null ? etToken.getText().toString().trim() : "";
 
-        // Validation
         if (token.isEmpty()) {
             tvError.setText("Por favor ingresa tu código");
             tvError.setVisibility(View.VISIBLE);
@@ -82,11 +78,9 @@ public class LoginActivity extends AppCompatActivity {
             return;
         }
 
-        // Hide error, show loading
         tvError.setVisibility(View.GONE);
         setLoading(true);
 
-        // Make API call using token login endpoint
         TokenLoginRequest request = new TokenLoginRequest(token);
         APIService api = RetrofitClient.api();
 
@@ -97,27 +91,25 @@ public class LoginActivity extends AppCompatActivity {
 
                 if (response.isSuccessful() && response.body() != null) {
                     LoginResponse loginResponse = response.body();
-                    
-                    // Save tokens (permanent session)
+
                     tokenManager.saveTokens(
                             loginResponse.getAccessToken(),
                             loginResponse.getRefreshToken()
                     );
 
-                    Log.d(TAG, "Login successful, user: " + 
+                    Log.d(TAG, "Login successful, user: " +
                             (loginResponse.getUser() != null ? loginResponse.getUser().getName() : "unknown"));
 
                     Toast.makeText(LoginActivity.this, "¡Bienvenido!", Toast.LENGTH_SHORT).show();
                     navigateToMain();
                 } else {
-                    // Login failed
                     String errorMsg = "Código inválido";
                     if (response.code() == 401) {
                         errorMsg = "Código incorrecto";
                     } else if (response.code() >= 500) {
                         errorMsg = "Error del servidor. Intenta más tarde.";
                     }
-                    
+
                     Log.w(TAG, "Login failed: " + response.code());
                     tvError.setText(errorMsg);
                     tvError.setVisibility(View.VISIBLE);
@@ -128,7 +120,7 @@ public class LoginActivity extends AppCompatActivity {
             public void onFailure(Call<LoginResponse> call, Throwable t) {
                 setLoading(false);
                 Log.e(TAG, "Login network error", t);
-                
+
                 tvError.setText("Error de conexión. Verifica tu internet.");
                 tvError.setVisibility(View.VISIBLE);
             }

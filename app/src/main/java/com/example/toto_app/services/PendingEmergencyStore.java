@@ -9,10 +9,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-/**
- * Almacena en memoria los mensajes de emergencia que no pudieron ser enviados.
- * Implementación simple: en memoria, thread-safe; envía al backend cuando se pueda.
- */
+
 public final class PendingEmergencyStore {
     private static final String TAG = "PendingEmergencyStore";
     private static final PendingEmergencyStore I = new PendingEmergencyStore();
@@ -35,8 +32,6 @@ public final class PendingEmergencyStore {
         synchronized (lock) {
             list.add(new Item(numberE164, userName, System.currentTimeMillis()));
             Log.i(TAG, "Queued emergency for " + numberE164);
-            // Notificar al usuario SOLO con notificación (sin TTS para evitar duplicación)
-            // El TTS lo maneja InstructionService que tiene el contexto completo
             try {
                 NotificationService.simpleActionNotification(
                         AppContext.get(),
@@ -50,10 +45,6 @@ public final class PendingEmergencyStore {
 
     public int size() { synchronized (lock) { return list.size(); } }
 
-    /**
-     * Intenta enviar todos los pendientes (de forma síncrona). Se llama cuando el backend
-     * vuelve vivo (BackendHealthManager lo dispara).
-     */
     public void flushPendingNow() {
         synchronized (lock) {
             int sentCount = 0;
@@ -66,7 +57,6 @@ public final class PendingEmergencyStore {
                         Log.i(TAG, "Sent queued emergency to " + itx.numberE164);
                         it.remove();
                         sentCount++;
-                        // Solo notificación visual, el TTS lo hacemos una vez al final
                         try {
                             NotificationService.simpleActionNotification(
                                     AppContext.get(),
@@ -80,7 +70,6 @@ public final class PendingEmergencyStore {
                 }
             }
 
-            // Si se envió al menos uno, hablar UNA SOLA VEZ
             if (sentCount > 0) {
                 try {
                     Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> sent " + sentCount + " message(s), speaking once");
@@ -90,7 +79,6 @@ public final class PendingEmergencyStore {
                             .putExtra(com.example.toto_app.services.WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
                     androidx.core.content.ContextCompat.startForegroundService(AppContext.get(), say);
                 } catch (Exception ignore) {
-                    // fallback to broadcast
                     try {
                         Log.d(TAG, "PendingEmergencyStore.flushPendingNow -> startForegroundService failed, broadcasting ACTION_PENDING_SENT");
                         android.content.Intent b = new android.content.Intent("com.example.toto_app.ACTION_PENDING_SENT");

@@ -19,14 +19,10 @@ import retrofit2.Call;
 import retrofit2.Callback;
 import retrofit2.Response;
 
-/**
- * Background service that polls the backend for pending reminders.
- * Similar to how WhatsApp messages are handled: announces when Toto is free.
- */
 public class ReminderPollingService extends Service {
 
     private static final String TAG = "ReminderPolling";
-    private static final long POLL_INTERVAL_MS = 120000; // 2 minutes
+    private static final long POLL_INTERVAL_MS = 120000;
 
     private Handler handler;
     private Runnable pollRunnable;
@@ -115,19 +111,16 @@ public class ReminderPollingService extends Service {
         Log.i(TAG, "Received " + reminders.size() + " pending reminders");
         PendingReminderStore.get().setPendingReminders(reminders);
 
-        // Get next reminder to announce (hasn't been announced recently)
         PendingReminderDTO nextReminder = PendingReminderStore.get().getNextToAnnounce();
         if (nextReminder == null) {
             return;
         }
 
-        // Check if we're already waiting for medication confirmation
         if (PendingReminderStore.get().isAwaitingMedicationConfirm()) {
             Log.d(TAG, "Already awaiting medication confirmation, skipping new announcement");
             return;
         }
 
-        // Announce the reminder via WakeWordService (it will enqueue if busy)
         announceReminder(nextReminder);
     }
 
@@ -138,8 +131,7 @@ public class ReminderPollingService extends Service {
         i.setAction(WakeWordService.ACTION_SAY);
         i.putExtra("text", reminder.getTtsMessage());
         i.putExtra(WakeWordService.EXTRA_ENQUEUE_IF_BUSY, true);
-        
-        // Only start instruction service (to listen for response) if it's a medication
+
         boolean isMedication = reminder.getIsMedication() != null && reminder.getIsMedication();
         if (isMedication) {
             i.putExtra(WakeWordService.EXTRA_AFTER_SAY_START_SERVICE, true);
@@ -147,14 +139,11 @@ public class ReminderPollingService extends Service {
         
         i.putExtra("reminder_id", reminder.getId());
         i.putExtra("is_medication", isMedication);
-        
-        // Mark as announced in store
+
         PendingReminderStore.get().markAnnounced(reminder);
-        
-        // Start instruction service to handle response
+
         androidx.core.content.ContextCompat.startForegroundService(this, i);
 
-        // Notify backend that reminder was announced
         notifyBackendReminderAnnounced(reminder.getId(), reminder.getElderlyId());
     }
 

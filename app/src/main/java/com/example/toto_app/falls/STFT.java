@@ -69,14 +69,14 @@ public class STFT {
 
     public static Bitmap toBitmap(float[][] spec01) {
         if (spec01 == null || spec01.length == 0) return null;
-        int width = spec01.length;       // tiempo
-        int height = spec01[0].length;   // frecuencia
+        int width = spec01.length;
+        int height = spec01[0].length;
 
         Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         for (int x = 0; x < width; x++) {
             float[] col = spec01[x];
             for (int y = 0; y < height; y++) {
-                float v = col[height - 1 - y]; // altas arriba
+                float v = col[height - 1 - y];
                 v = v < 0f ? 0f : (v > 1f ? 1f : v);
                 int g = (int) (v * 255f);
                 bmp.setPixel(x, y, Color.rgb(g, g, g));

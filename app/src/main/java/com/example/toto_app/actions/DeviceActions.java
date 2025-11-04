@@ -30,12 +30,10 @@ import java.util.Locale;
 public final class DeviceActions {
     private DeviceActions(){}
 
-    // ───────── Resultado setAlarm ─────────
     public enum AlarmResult { SET_SILENT, UI_ACTION_REQUIRED, FAILED }
 
     private static final String CH_ALARM_CONFIRM = "toto_alarm_confirm";
 
-    // ───────── Llamadas / Contactos ─────────
     public static final class ResolvedContact {
         public final String name;
         public final String number;
@@ -122,19 +120,11 @@ public final class DeviceActions {
         return null;
     }
 
-    // ───────── Alarmas ─────────
-    /**
-     * Crea ALARMA:
-     * - En OEMs no-Samsung intenta modo silencioso (sin UI).
-     * - En Samsung (y si el intento silencioso falla) publica una NOTIFICACIÓN con acción
-     *   para que el usuario toque y abra el Reloj (evita Background Activity Launch block).
-     */
     public static AlarmResult setAlarm(Context ctx, int hour24, int minute, String baseLabel) {
         hour24  = Math.max(0, Math.min(23, hour24));
         minute  = Math.max(0, Math.min(59, minute));
 
         String whenText = hhmm(hour24, minute);
-        // etiqueta “única” para que el reloj no edite la anterior
         String labelBase = (baseLabel != null && !baseLabel.isEmpty()) ? baseLabel : "Toto";
         String uniqueSuffix = " • " + (SystemClock.uptimeMillis() % 10000);
         String label = labelBase + " " + whenText + uniqueSuffix;
@@ -142,7 +132,6 @@ public final class DeviceActions {
         boolean isSamsung = "samsung".equalsIgnoreCase(Build.MANUFACTURER);
         String targetPkg = selectClockPackage(ctx);
 
-        // Intent de creación silenciosa
         Intent silent = new Intent(AlarmClock.ACTION_SET_ALARM)
                 .putExtra(AlarmClock.EXTRA_HOUR, hour24)
                 .putExtra(AlarmClock.EXTRA_MINUTES, minute)
@@ -157,13 +146,10 @@ public final class DeviceActions {
                 ctx.startActivity(silent);
                 return AlarmResult.SET_SILENT;
             } catch (SecurityException | ActivityNotFoundException e) {
-                // pasamos a notificación con acción
             }
         } else {
-            // En Samsung, muchas veces ignora la 2da+ silenciosa → vamos directo a notificación
-        }
+            }
 
-        // Intent con UI (no lo lanzamos directo para evitar BAL)
         Intent withUi = new Intent(AlarmClock.ACTION_SET_ALARM)
                 .putExtra(AlarmClock.EXTRA_HOUR, hour24)
                 .putExtra(AlarmClock.EXTRA_MINUTES, minute)
@@ -239,7 +225,6 @@ public final class DeviceActions {
         catch (Exception ignored) { return false; }
     }
 
-    // ───────── Helpers ─────────
     private static String cleanContactQuery(String raw) {
         if (raw == null) return "";
         String s = raw.trim().toLowerCase(Locale.ROOT);

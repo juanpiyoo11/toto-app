@@ -3,11 +3,11 @@ package com.example.toto_app.network;
 public class PendingReminderDTO {
     private Long id;
     private Long elderlyId;
-    private String reminderType; // MEDICATION, APPOINTMENT, EVENT
+    private String reminderType;
     private String title;
-    private String ttsMessage; // Pre-formatted message for Text-to-Speech
-    private String scheduledFor; // ISO 8601 format
-    private Boolean isMedication; // Quick flag for medication confirmation flow
+    private String ttsMessage;
+    private String scheduledFor;
+    private Boolean isMedication;
 
     public PendingReminderDTO() {
     }

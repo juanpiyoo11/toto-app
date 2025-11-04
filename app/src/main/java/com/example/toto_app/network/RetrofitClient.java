@@ -31,7 +31,6 @@ public final class RetrofitClient {
                     OkHttpClient.Builder clientBuilder = new OkHttpClient.Builder()
                             .addInterceptor(log);
 
-                    // Add AuthInterceptor if context is available
                     if (appContext != null) {
                         clientBuilder.addInterceptor(new AuthInterceptor(appContext));
                     }
