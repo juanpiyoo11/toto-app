@@ -126,7 +126,7 @@ public interface APIService {
     @POST("api/nlu/route")
     Call<NluRouteResponse> nluRoute(@Body NluRouteRequest req);
 
-    @POST("api/whatsapp/send")
+    @POST("api/messaging/send")
     Call<WhatsAppSendResponse> waSend(@Body WhatsAppSendRequest req);
 
     @POST("/api/spotify/pause")
